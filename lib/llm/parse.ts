@@ -3,16 +3,53 @@ import type { TaskCategory } from '@/types/data';
 
 const TASK_CATEGORIES: TaskCategory[] = ['research', 'teaching_service', 'family', 'health'];
 
+type ScheduleBlockType = 'deep_work' | 'shallow_work' | 'meeting' | 'break' | 'life';
+
+const SCHEDULE_BLOCK_TYPES: ScheduleBlockType[] = [
+  'deep_work',
+  'shallow_work',
+  'meeting',
+  'break',
+  'life',
+];
+
 const sanitizeCategory = (value?: string | null): TaskCategory => {
   if (!value) return 'research';
-  return TASK_CATEGORIES.includes(value as TaskCategory)
-    ? (value as TaskCategory)
+  const normalized = value.trim().toLowerCase();
+  const alias: Record<string, TaskCategory> = {
+    admin: 'teaching_service',
+    administrative: 'teaching_service',
+    personal: 'family',
+  };
+  const mapped = alias[normalized];
+  if (mapped) return mapped;
+  return TASK_CATEGORIES.includes(normalized as TaskCategory)
+    ? (normalized as TaskCategory)
     : 'research';
 };
 
 const TaskCategorySchema = z
   .string()
   .transform((value): TaskCategory => sanitizeCategory(value));
+
+const sanitizeScheduleBlockType = (value?: string | null): ScheduleBlockType => {
+  if (!value) return 'life';
+  const normalized = value.trim().toLowerCase();
+  if (SCHEDULE_BLOCK_TYPES.includes(normalized as ScheduleBlockType)) {
+    return normalized as ScheduleBlockType;
+  }
+  const alias: Record<string, ScheduleBlockType> = {
+    admin: 'shallow_work',
+    administrative: 'shallow_work',
+    personal: 'life',
+    planning: 'shallow_work',
+  };
+  return alias[normalized] ?? 'life';
+};
+
+const ScheduleBlockTypeSchema = z
+  .string()
+  .transform((value): ScheduleBlockType => sanitizeScheduleBlockType(value));
 
 const CreateTaskDataSchema = z
   .object({
@@ -94,7 +131,7 @@ const PlanDataSchema = z.object({
         end: z.string().regex(/^([0-1][0-9]|2[0-3]):([0-5][0-9])$/),
         label: z.string(),
         taskId: TaskIdOrTempIdSchema.nullable(),
-        type: z.enum(['deep_work', 'shallow_work', 'meeting', 'break', 'life']),
+        type: ScheduleBlockTypeSchema,
       })
     )
     .optional(),
@@ -162,18 +199,60 @@ export function parseLLMResponse(text: string): LLMResponse {
     }
   }
   jsonStr = cleanJsonString(jsonStr);
+
+  const parseAttempt = (() => {
+    try {
+      return { ok: true as const, value: JSON.parse(jsonStr) };
+    } catch (error) {
+      const repaired = escapeNewlinesInJsonStrings(jsonStr);
+      if (repaired !== jsonStr) {
+        try {
+          return { ok: true as const, value: JSON.parse(repaired) };
+        } catch (repairedError) {
+          return { ok: false as const, error: repairedError };
+        }
+      }
+      return { ok: false as const, error };
+    }
+  })();
+
   try {
-    const parsed = JSON.parse(jsonStr);
+    if (!parseAttempt.ok) {
+      throw parseAttempt.error;
+    }
+    const parsed = parseAttempt.value as any;
     const validated = LLMResponseSchema.safeParse(parsed);
     if (validated.success) {
       return validated.data;
     }
     console.warn('LLM response validation failed:', validated.error);
     console.warn('Raw response:', rawResponse);
-    const reasoning = parsed?.reasoning ?? text;
+    const reasoning =
+      typeof parsed?.reasoning === 'string' && parsed.reasoning.trim()
+        ? parsed.reasoning
+        : text;
+
+    const proposedOperationsRaw = Array.isArray(parsed?.proposedOperations)
+      ? parsed.proposedOperations
+      : [];
+    const proposedOperations = proposedOperationsRaw
+      .map((operation: unknown, index: number) => {
+        const opResult = ProposedOperationSchema.safeParse(operation);
+        if (!opResult.success) {
+          console.warn(`Dropping invalid proposedOperations[${index}]`, opResult.error);
+          return null;
+        }
+        return opResult.data;
+      })
+      .filter(
+        (
+          operation: z.infer<typeof ProposedOperationSchema> | null
+        ): operation is z.infer<typeof ProposedOperationSchema> => operation !== null
+      );
+
     return {
       reasoning: String(reasoning),
-      proposedOperations: [],
+      proposedOperations,
       questions: parsed?.questions,
     };
   } catch (parseError) {
@@ -183,6 +262,58 @@ export function parseLLMResponse(text: string): LLMResponse {
       proposedOperations: [],
     };
   }
+}
+
+function escapeNewlinesInJsonStrings(input: string): string {
+  let inString = false;
+  let escapeNext = false;
+  let output = '';
+
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i];
+
+    if (escapeNext) {
+      output += char;
+      escapeNext = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      output += char;
+      if (inString) escapeNext = true;
+      continue;
+    }
+
+    if (char === '"') {
+      output += char;
+      inString = !inString;
+      continue;
+    }
+
+    if (inString && char === '\n') {
+      output += '\\n';
+      continue;
+    }
+
+    if (inString && char === '\r') {
+      output += '\\r';
+      continue;
+    }
+
+    if (inString && char === '\u2028') {
+      output += '\\u2028';
+      continue;
+    }
+
+    if (inString && char === '\u2029') {
+      output += '\\u2029';
+      continue;
+    }
+
+    output += char;
+  }
+
+  return output;
 }
 
 function extractFirstJsonObject(text: string): string | null {
