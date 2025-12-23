@@ -1,381 +1,990 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Plan, ProposedOperation, ScheduleBlock, Task } from '@/types/data';
+import { useState, useEffect, useRef, useCallback } from 'react';
+
+// ============================================
+// TYPES
+// ============================================
+
+interface Task {
+  id: string;
+  title: string;
+  notes: string | null;
+  category: 'research' | 'teaching_service' | 'family' | 'health';
+  status: 'active' | 'done' | 'archived';
+  dueOn: string | null;
+  dueTime: string | null;
+  location: string | null;
+  recurrenceRule: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ScheduleBlock {
+  start: string;
+  end: string;
+  label: string;
+  taskId: string | null;
+  type: 'deep_work' | 'shallow_work' | 'meeting' | 'break' | 'life';
+}
+
+interface Plan {
+  id: string;
+  date: string;
+  rankedTaskIds: string[];
+  nextActions: { action: string; taskId: string | null }[];
+  scheduleBlocks: ScheduleBlock[];
+  assumptions: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ProposedOperation {
+  op: string;
+  description: string;
+  data: Record<string, unknown>;
+}
 
 interface ChatMessage {
+  id: string;
   role: 'user' | 'assistant';
   content: string;
-  timestamp: string;
+  proposedOperations?: ProposedOperation[] | null;
+  timestamp: Date;
 }
 
-interface PendingOperationsState {
-  messageId: string;
-  operations: ProposedOperation[];
-}
+// ============================================
+// CONSTANTS
+// ============================================
 
-interface TasksResponse {
-  tasks: Task[];
-}
+const CATEGORY_CONFIG = {
+  research: { label: 'Research', icon: '◈', color: 'text-cyan-400' },
+  teaching_service: { label: 'Teaching & Service', icon: '◎', color: 'text-amber-400' },
+  family: { label: 'Family', icon: '◉', color: 'text-rose-400' },
+  health: { label: 'Health', icon: '◐', color: 'text-emerald-400' },
+} as const;
 
-interface PlanResponse {
-  plan: Plan | null;
-  date: string;
-}
+const BLOCK_TYPE_STYLES = {
+  deep_work: { bg: 'bg-cyan-500/20', border: 'border-cyan-500/40', label: 'Deep Work' },
+  shallow_work: { bg: 'bg-amber-500/20', border: 'border-amber-500/40', label: 'Shallow Work' },
+  meeting: { bg: 'bg-purple-500/20', border: 'border-purple-500/40', label: 'Meeting' },
+  break: { bg: 'bg-slate-500/20', border: 'border-slate-500/40', label: 'Break' },
+  life: { bg: 'bg-rose-500/20', border: 'border-rose-500/40', label: 'Life' },
+} as const;
 
-const CATEGORY_LABELS: Record<string, string> = {
-  research: 'Research',
-  teaching_service: 'Teaching & Service',
-  family: 'Family',
-  health: 'Health',
-};
+// ============================================
+// GLASS PANEL COMPONENT
+// ============================================
 
-const BLOCK_TYPE_LABELS: Record<ScheduleBlock['type'], string> = {
-  deep_work: 'Deep Work',
-  shallow_work: 'Shallow Work',
-  meeting: 'Meeting',
-  break: 'Break',
-  life: 'Life',
-};
-
-interface OperationSelection {
-  [index: number]: boolean;
-}
-
-function formatTimeLabel(time: string): string {
-  if (!time.includes(':')) return time;
-  const [hour, minute] = time.split(':').map(Number);
-  const suffix = hour >= 12 ? 'PM' : 'AM';
-  const normalizedHour = hour % 12 === 0 ? 12 : hour % 12;
-  return `${normalizedHour}:${minute.toString().padStart(2, '0')} ${suffix}`;
-}
-
-function groupTasksByCategory(tasks: Task[]): Record<string, Task[]> {
-  return tasks.reduce<Record<string, Task[]>>((acc, task) => {
-    const key = task.category;
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(task);
-    return acc;
-  }, {});
-}
-
-function TaskCard({ task }: { task: Task }) {
-  return (
-    <div className="task-card">
-      <div className="task-title">{task.title}</div>
-      <div className="task-meta">
-        <span>{task.status === 'done' ? 'Completed' : task.category}</span>
-        {task.dueOn ? <span>Due {task.dueOn}</span> : null}
-      </div>
-    </div>
-  );
-}
-
-function ScheduleBlockCard({ block }: { block: ScheduleBlock }) {
-  return (
-    <div className="schedule-block">
-      <div className="time-range">
-        {formatTimeLabel(block.start)} – {formatTimeLabel(block.end)}
-      </div>
-      <div className="block-label">{block.label}</div>
-      <div className="block-type">{BLOCK_TYPE_LABELS[block.type]}</div>
-    </div>
-  );
-}
-
-function ProposedOperationsList({
-  pending,
-  selections,
-  onToggle,
-}: {
-  pending: PendingOperationsState;
-  selections: OperationSelection;
-  onToggle: (index: number) => void;
+function GlassPanel({ 
+  children, 
+  className = '',
+  glow = false,
+}: { 
+  children: React.ReactNode; 
+  className?: string;
+  glow?: boolean;
 }) {
-  if (pending.operations.length === 0) {
+  return (
+    <div 
+      className={`
+        relative
+        bg-slate-900/70 backdrop-blur-xl
+        border border-slate-700/50
+        rounded-lg
+        shadow-2xl
+        ${glow ? 'shadow-[0_0_30px_rgba(6,182,212,0.15)]' : ''}
+        ${className}
+      `}
+      style={{ WebkitBackdropFilter: 'blur(24px)' }}
+    >
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-slate-400/30 to-transparent" />
+      {children}
+    </div>
+  );
+}
+
+// ============================================
+// AMBIENT BACKGROUND
+// ============================================
+
+function AmbientBackground() {
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageError, setImageError] = useState(false);
+
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => setImageLoaded(true);
+    img.onerror = () => setImageError(true);
+    img.src = '/backgrounds/ambient-outpost.jpg';
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-0">
+      {/* Gradient fallback - always visible as base */}
+      <div className="absolute inset-0 bg-gradient-to-b from-slate-900 via-slate-950 to-black" />
+      
+      {/* Atmospheric effects for fallback */}
+      {imageError && (
+        <>
+          <div className="absolute bottom-0 left-0 right-0 h-[40%] bg-gradient-to-t from-slate-800/50 to-transparent" />
+          <div className="absolute bottom-[25%] left-[20%] w-32 h-20 bg-amber-500/10 rounded-full blur-3xl" />
+          <div className="absolute bottom-[20%] right-[30%] w-24 h-16 bg-amber-500/10 rounded-full blur-3xl" />
+        </>
+      )}
+
+      {/* Actual background image */}
+      {imageLoaded && !imageError && (
+        <div 
+          className="absolute inset-0 bg-cover bg-center bg-no-repeat transition-opacity duration-1000"
+          style={{ backgroundImage: `url('/backgrounds/ambient-outpost.jpg')` }}
+        />
+      )}
+      
+      {/* Gradient overlay for text readability */}
+      <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-slate-950/30" />
+      
+      {/* Vignette effect */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,rgba(0,0,0,0.4)_100%)]" />
+      
+      {/* Noise texture */}
+      <div 
+        className="absolute inset-0 opacity-[0.03] pointer-events-none"
+        style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
+        }}
+      />
+    </div>
+  );
+}
+
+// ============================================
+// TASK DRAWER (LEFT - SLIDES IN)
+// ============================================
+
+function TaskDrawer({
+  isOpen,
+  onToggle,
+  tasks,
+  onSelectTask,
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+  tasks: Task[];
+  onSelectTask: (task: Task) => void;
+}) {
+  const tasksByCategory = tasks.reduce((acc, task) => {
+    if (task.status === 'active') {
+      if (!acc[task.category]) acc[task.category] = [];
+      acc[task.category].push(task);
+    }
+    return acc;
+  }, {} as Record<string, Task[]>);
+
+  return (
+    <>
+      {/* Toggle Button - visible when drawer is closed */}
+      <button
+        onClick={onToggle}
+        className={`
+          fixed left-4 top-1/2 -translate-y-1/2 z-50
+          w-12 h-24 
+          bg-slate-900/80 backdrop-blur-md
+          border border-slate-700/50
+          rounded-r-lg
+          flex items-center justify-center
+          transition-all duration-300
+          hover:bg-slate-800/80 hover:border-cyan-500/30
+          group
+          ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
+        `}
+        style={{ WebkitBackdropFilter: 'blur(12px)' }}
+        aria-label="Open task list"
+      >
+        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-lg">
+          ▶
+        </span>
+      </button>
+
+      {/* Drawer Panel */}
+      <div 
+        className={`
+          fixed left-0 top-0 h-full z-40
+          transition-transform duration-500 ease-out
+          ${isOpen ? 'translate-x-0' : '-translate-x-full'}
+        `}
+      >
+        <GlassPanel className="h-full w-80 flex flex-col rounded-l-none">
+          {/* Header */}
+          <div className="flex items-center justify-between p-4 border-b border-slate-700/50">
+            <div className="flex items-center gap-2">
+              <span className="text-cyan-400 text-sm font-mono">◆</span>
+              <h2 className="text-slate-200 font-semibold tracking-wide">TASK MANIFEST</h2>
+            </div>
+            <button
+              onClick={onToggle}
+              className="text-slate-500 hover:text-slate-300 transition-colors p-1"
+              aria-label="Close task list"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Task Categories */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
+            {(Object.keys(CATEGORY_CONFIG) as Array<keyof typeof CATEGORY_CONFIG>).map((category) => {
+              const config = CATEGORY_CONFIG[category];
+              const categoryTasks = tasksByCategory[category] || [];
+
+              return (
+                <div key={category} className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className={config.color}>{config.icon}</span>
+                    <span className="text-slate-400 font-mono uppercase tracking-wider text-xs">
+                      {config.label}
+                    </span>
+                    <span className="text-slate-600 text-xs">({categoryTasks.length})</span>
+                  </div>
+
+                  {categoryTasks.length === 0 ? (
+                    <p className="text-slate-600 text-xs italic pl-5">No active tasks</p>
+                  ) : (
+                    <div className="space-y-1 pl-5">
+                      {categoryTasks.map((task) => (
+                        <button
+                          key={task.id}
+                          onClick={() => onSelectTask(task)}
+                          className="
+                            w-full text-left p-2 rounded
+                            bg-slate-800/30 hover:bg-slate-700/50
+                            border border-transparent hover:border-slate-600/50
+                            transition-all duration-200
+                            group
+                          "
+                        >
+                          <p className="text-slate-300 text-sm group-hover:text-slate-100 transition-colors">
+                            {task.title}
+                          </p>
+                          {task.dueOn && (
+                            <p className="text-slate-500 text-xs font-mono mt-1">
+                              {task.dueTime ? `${task.dueOn} @ ${task.dueTime}` : task.dueOn}
+                            </p>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Footer */}
+          <div className="p-4 border-t border-slate-700/50">
+            <p className="text-slate-600 text-xs font-mono text-center">
+              {tasks.filter(t => t.status === 'active').length} ACTIVE TASKS
+            </p>
+          </div>
+        </GlassPanel>
+      </div>
+
+      {/* Backdrop overlay when drawer is open */}
+      {isOpen && (
+        <div 
+          className="fixed inset-0 bg-black/20 backdrop-blur-sm z-30"
+          onClick={onToggle}
+        />
+      )}
+    </>
+  );
+}
+
+// ============================================
+// SCHEDULE PANEL (RIGHT - ALWAYS VISIBLE)
+// ============================================
+
+function SchedulePanel({
+  plan,
+  tasks,
+  currentTime,
+}: {
+  plan: Plan | null;
+  tasks: Task[];
+  currentTime: Date;
+}) {
+  const scheduleBlocks = plan?.scheduleBlocks || [];
+  const taskMap = tasks.reduce((acc, t) => ({ ...acc, [t.id]: t }), {} as Record<string, Task>);
+
+  return (
+    <GlassPanel className="w-72 h-full flex flex-col rounded-r-none" glow>
+      {/* Header */}
+      <div className="p-4 border-b border-slate-700/50">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-amber-400 text-sm font-mono">◇</span>
+          <h2 className="text-slate-200 font-semibold tracking-wide">DAILY SCHEDULE</h2>
+        </div>
+        <p className="text-slate-500 text-xs font-mono">
+          {currentTime.toLocaleDateString('en-US', { 
+            weekday: 'long', 
+            month: 'short', 
+            day: 'numeric' 
+          }).toUpperCase()}
+        </p>
+      </div>
+
+      {/* Current time display */}
+      <div className="px-4 py-2 border-b border-slate-700/30">
+        <p className="text-cyan-400 text-lg font-mono">
+          {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
+        </p>
+      </div>
+
+      {/* Timeline */}
+      <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
+        {scheduleBlocks.length === 0 ? (
+          <div className="flex items-center justify-center h-full">
+            <p className="text-slate-600 text-sm italic">No schedule planned</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {scheduleBlocks.map((block, idx) => {
+              const style = BLOCK_TYPE_STYLES[block.type] || BLOCK_TYPE_STYLES.shallow_work;
+              const linkedTask = block.taskId ? taskMap[block.taskId] : null;
+
+              return (
+                <div
+                  key={idx}
+                  className={`
+                    p-3 rounded-lg border
+                    ${style.bg} ${style.border}
+                    transition-all duration-200
+                    hover:scale-[1.02]
+                  `}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-slate-300 text-xs font-mono">
+                      {block.start} — {block.end}
+                    </span>
+                  </div>
+                  <p className="text-slate-200 text-sm font-medium">{block.label}</p>
+                  {linkedTask && (
+                    <p className="text-slate-400 text-xs mt-1 truncate">
+                      → {linkedTask.title}
+                    </p>
+                  )}
+                  <p className="text-slate-500 text-xs mt-1 font-mono uppercase">
+                    {style.label}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="p-4 border-t border-slate-700/50">
+        <p className="text-slate-600 text-xs font-mono text-center">
+          {scheduleBlocks.length} BLOCKS SCHEDULED
+        </p>
+      </div>
+    </GlassPanel>
+  );
+}
+
+// ============================================
+// CHAT OVERLAY (CENTER - TOGGLEABLE MODAL)
+// ============================================
+
+function ChatOverlay({
+  isVisible,
+  onToggle,
+  messages,
+  onSendMessage,
+  isSending,
+  pendingOperations,
+  onConfirmOperations,
+  onDismissOperations,
+}: {
+  isVisible: boolean;
+  onToggle: () => void;
+  messages: ChatMessage[];
+  onSendMessage: (message: string, calendar?: string) => void;
+  isSending: boolean;
+  pendingOperations: ProposedOperation[] | null;
+  onConfirmOperations: (indexes: number[]) => void;
+  onDismissOperations: () => void;
+}) {
+  const [inputValue, setInputValue] = useState('');
+  const [calendarValue, setCalendarValue] = useState('');
+  const [selectedOps, setSelectedOps] = useState<Set<number>>(new Set());
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  useEffect(() => {
+    if (pendingOperations) {
+      setSelectedOps(new Set(pendingOperations.map((_, i) => i)));
+    }
+  }, [pendingOperations]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (inputValue.trim() && !isSending) {
+      onSendMessage(inputValue.trim(), calendarValue.trim() || undefined);
+      setInputValue('');
+      setCalendarValue('');
+    }
+  };
+
+  const toggleOp = (idx: number) => {
+    const newSet = new Set(selectedOps);
+    if (newSet.has(idx)) {
+      newSet.delete(idx);
+    } else {
+      newSet.add(idx);
+    }
+    setSelectedOps(newSet);
+  };
+
+  if (!isVisible) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-8">
+      {/* Backdrop */}
+      <div 
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+        onClick={onToggle}
+      />
+
+      {/* Chat Panel */}
+      <GlassPanel className="relative w-full max-w-2xl h-[70vh] flex flex-col" glow>
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-slate-700/50">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse" />
+            <h2 className="text-slate-200 font-semibold tracking-wide">PROFFLOW TERMINAL</h2>
+          </div>
+          <button
+            onClick={onToggle}
+            className="text-slate-500 hover:text-slate-300 transition-colors p-1 text-xl"
+            aria-label="Close chat"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
+          {messages.length === 0 && (
+            <div className="flex items-center justify-center h-full">
+              <p className="text-slate-600 text-sm italic">Start a conversation...</p>
+            </div>
+          )}
+          
+          {messages.map((msg) => (
+            <div
+              key={msg.id}
+              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
+              <div className={`
+                max-w-[80%] p-3 rounded-lg
+                ${msg.role === 'user' 
+                  ? 'bg-cyan-600/30 border border-cyan-500/30' 
+                  : 'bg-slate-800/50 border border-slate-700/50'}
+              `}>
+                <p className="text-xs text-slate-500 font-mono mb-1 uppercase">
+                  {msg.role === 'user' ? 'You' : 'ProfFlow'}
+                </p>
+                <p className="text-slate-200 text-sm whitespace-pre-wrap">{msg.content}</p>
+              </div>
+            </div>
+          ))}
+
+          {isSending && (
+            <div className="flex justify-start">
+              <div className="bg-slate-800/50 border border-slate-700/50 p-3 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-cyan-400 rounded-full animate-ping" />
+                  <span className="text-slate-400 text-sm">Processing...</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Pending Operations Panel */}
+        {pendingOperations && pendingOperations.length > 0 && (
+          <div className="border-t border-slate-700/50 p-4 bg-slate-800/30">
+            <p className="text-xs text-amber-400 font-mono mb-3 uppercase">
+              ◆ Proposed Operations ({pendingOperations.length})
+            </p>
+            <div className="space-y-2 max-h-32 overflow-y-auto mb-3 scrollbar-thin">
+              {pendingOperations.map((op, idx) => (
+                <label
+                  key={idx}
+                  className="flex items-start gap-3 p-2 rounded bg-slate-900/50 hover:bg-slate-900/70 cursor-pointer transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedOps.has(idx)}
+                    onChange={() => toggleOp(idx)}
+                    className="mt-1 accent-cyan-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-slate-300 text-sm">{op.description}</p>
+                    <p className="text-slate-500 text-xs font-mono">{op.op}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => onConfirmOperations(Array.from(selectedOps))}
+                disabled={selectedOps.size === 0}
+                className="
+                  flex-1 py-2 px-4 rounded
+                  bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:cursor-not-allowed
+                  text-white text-sm font-medium
+                  transition-colors
+                "
+              >
+                Confirm ({selectedOps.size})
+              </button>
+              <button
+                onClick={onDismissOperations}
+                className="
+                  py-2 px-4 rounded
+                  bg-slate-700 hover:bg-slate-600
+                  text-slate-300 text-sm
+                  transition-colors
+                "
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Input Area */}
+        <form onSubmit={handleSubmit} className="p-4 border-t border-slate-700/50 space-y-2">
+          <textarea
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            placeholder="Enter command or request..."
+            disabled={isSending}
+            rows={2}
+            className="
+              w-full p-3 rounded-lg
+              bg-slate-800/50 border border-slate-700/50
+              text-slate-200 placeholder-slate-500
+              focus:outline-none focus:border-cyan-500/50
+              resize-none
+              text-sm
+            "
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSubmit(e);
+              }
+            }}
+          />
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={calendarValue}
+              onChange={(e) => setCalendarValue(e.target.value)}
+              placeholder="Calendar context (optional)"
+              disabled={isSending}
+              className="
+                flex-1 p-2 rounded
+                bg-slate-800/30 border border-slate-700/30
+                text-slate-300 placeholder-slate-600
+                focus:outline-none focus:border-slate-600
+                text-xs
+              "
+            />
+            <button
+              type="submit"
+              disabled={!inputValue.trim() || isSending}
+              className="
+                px-6 py-2 rounded
+                bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:cursor-not-allowed
+                text-white text-sm font-medium
+                transition-colors
+              "
+            >
+              {isSending ? '...' : 'Send'}
+            </button>
+          </div>
+        </form>
+      </GlassPanel>
+    </div>
+  );
+}
+
+// ============================================
+// FOCUS TASK (BOTTOM CENTER - ALWAYS VISIBLE)
+// ============================================
+
+function FocusTask({
+  task,
+  onComplete,
+}: {
+  task: Task | null;
+  onComplete: () => void;
+}) {
+  if (!task) {
     return (
-      <div className="proposed-ops">
-        <div className="proposed-ops__title">No structured operations detected</div>
-        <p>The assistant responded with reasoning only. You can continue the conversation.</p>
+      <div className="w-full max-w-xl">
+        <GlassPanel className="p-6 text-center">
+          <p className="text-slate-500 text-sm italic">No focus task selected</p>
+          <p className="text-slate-600 text-xs mt-2">Open the task panel or use chat to set your focus</p>
+        </GlassPanel>
       </div>
     );
   }
 
+  const config = CATEGORY_CONFIG[task.category];
+
   return (
-    <div className="proposed-ops">
-      <div className="proposed-ops__title">Review Proposed Changes</div>
-      <ul>
-        {pending.operations.map((op, index) => (
-          <li key={`${pending.messageId}-${index}`}>
-            <label>
-              <input
-                type="checkbox"
-                checked={selections[index] ?? true}
-                onChange={() => onToggle(index)}
-              />
-              <span>
-                <strong>{op.op}</strong>: {op.description || 'No description provided'}
-              </span>
-            </label>
-          </li>
-        ))}
-      </ul>
+    <div className="w-full max-w-xl">
+      <GlassPanel className="p-6 border-cyan-500/30" glow>
+        {/* Status indicator */}
+        <div className="flex items-center gap-2 mb-3">
+          <div className="flex items-center gap-1">
+            <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse" />
+            <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse" style={{ animationDelay: '75ms' }} />
+            <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse" style={{ animationDelay: '150ms' }} />
+          </div>
+          <span className="text-cyan-400 text-xs font-mono uppercase tracking-wider">
+            Current Focus
+          </span>
+        </div>
+
+        {/* Task title */}
+        <h3 className="text-slate-100 text-xl font-semibold mb-2">{task.title}</h3>
+
+        {/* Meta info */}
+        <div className="flex items-center gap-4 text-sm">
+          <span className={`flex items-center gap-1 ${config.color}`}>
+            {config.icon} {config.label}
+          </span>
+          {task.dueTime && (
+            <span className="text-slate-400 font-mono">
+              Due: {task.dueTime}
+            </span>
+          )}
+        </div>
+
+        {/* Notes */}
+        {task.notes && (
+          <p className="text-slate-400 text-sm mt-3 line-clamp-2">{task.notes}</p>
+        )}
+
+        {/* Action */}
+        <button
+          onClick={onComplete}
+          className="
+            mt-4 w-full py-2 rounded
+            bg-emerald-600/20 border border-emerald-500/30
+            text-emerald-400 text-sm font-medium
+            hover:bg-emerald-600/30 hover:border-emerald-500/50
+            transition-all
+          "
+        >
+          Mark Complete ✓
+        </button>
+      </GlassPanel>
     </div>
   );
 }
 
-export default function HomePage() {
+// ============================================
+// CHAT TOGGLE BUTTON (FLOATING)
+// ============================================
+
+function ChatToggle({ onClick, hasUnread }: { onClick: () => void; hasUnread: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      className="
+        fixed bottom-8 right-80 z-20
+        w-14 h-14 rounded-full
+        bg-slate-900/80 backdrop-blur-md
+        border border-slate-700/50
+        flex items-center justify-center
+        hover:bg-slate-800/80 hover:border-cyan-500/30
+        transition-all duration-300
+        group
+        shadow-lg
+      "
+      style={{ WebkitBackdropFilter: 'blur(12px)' }}
+      aria-label="Toggle chat"
+    >
+      <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-xl">
+        💬
+      </span>
+      {hasUnread && (
+        <span className="absolute top-0 right-0 w-3 h-3 bg-cyan-400 rounded-full animate-pulse" />
+      )}
+    </button>
+  );
+}
+
+// ============================================
+// MAIN PAGE COMPONENT
+// ============================================
+
+export default function ProfFlowPage() {
+  // Data State
   const [tasks, setTasks] = useState<Task[]>([]);
   const [plan, setPlan] = useState<Plan | null>(null);
-  const [planDate, setPlanDate] = useState<string>('');
+  const [focusTask, setFocusTask] = useState<Task | null>(null);
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  // UI State
+  const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
+  const [chatVisible, setChatVisible] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [calendarText, setCalendarText] = useState('');
   const [isSending, setIsSending] = useState(false);
-  const [pendingOps, setPendingOps] = useState<PendingOperationsState | null>(null);
-  const [operationSelections, setOperationSelections] = useState<OperationSelection>({});
-  const [error, setError] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [pendingOperations, setPendingOperations] = useState<ProposedOperation[] | null>(null);
+  const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
 
-  const fetchTasks = useCallback(async () => {
-    try {
-      const response = await fetch('/api/tasks', { cache: 'no-store' });
-      const data: TasksResponse = await response.json();
-      setTasks(data.tasks ?? []);
-    } catch (err) {
-      console.error('Failed to fetch tasks', err);
-    }
-  }, []);
-
-  const fetchPlan = useCallback(async () => {
-    try {
-      const response = await fetch('/api/plans/today', { cache: 'no-store' });
-      const data: PlanResponse = await response.json();
-      setPlan(data.plan ?? null);
-      setPlanDate(data.date);
-    } catch (err) {
-      console.error('Failed to fetch plan', err);
-    }
-  }, []);
-
-  const refreshState = useCallback(async () => {
-    await Promise.all([fetchTasks(), fetchPlan()]);
-  }, [fetchTasks, fetchPlan]);
-
+  // Update time every minute
   useEffect(() => {
-    refreshState();
-  }, [refreshState]);
+    const interval = setInterval(() => setCurrentTime(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
-  const groupedTasks = useMemo(() => groupTasksByCategory(tasks), [tasks]);
+  // Fetch initial data
+  useEffect(() => {
+    fetchTasks();
+    fetchPlan();
+  }, []);
 
-  const nowQueue = useMemo(() => {
-    return tasks.filter((task) => task.status === 'active').slice(0, 5);
-  }, [tasks]);
+  // Set focus task from plan's top ranked task
+  useEffect(() => {
+    if (plan && plan.rankedTaskIds.length > 0 && tasks.length > 0) {
+      const topTaskId = plan.rankedTaskIds[0];
+      const topTask = tasks.find(t => t.id === topTaskId && t.status === 'active');
+      if (topTask) {
+        setFocusTask(topTask);
+      }
+    } else if (tasks.length > 0 && !focusTask) {
+      // Fallback: use first active task if no plan
+      const firstActive = tasks.find(t => t.status === 'active');
+      if (firstActive) {
+        setFocusTask(firstActive);
+      }
+    }
+  }, [plan, tasks]);
 
-  const handleSend = async () => {
-    if (!input.trim()) return;
-    setError(null);
-    setStatusMessage(null);
-    const newMessage: ChatMessage = {
+  const fetchTasks = async () => {
+    try {
+      const res = await fetch('/api/tasks');
+      if (!res.ok) throw new Error('Failed to fetch tasks');
+      const data = await res.json();
+      setTasks(data.tasks || []);
+    } catch (err) {
+      console.error('Failed to fetch tasks:', err);
+    }
+  };
+
+  const fetchPlan = async () => {
+    try {
+      const res = await fetch('/api/plans/today');
+      if (!res.ok) throw new Error('Failed to fetch plan');
+      const data = await res.json();
+      setPlan(data.plan || null);
+    } catch (err) {
+      console.error('Failed to fetch plan:', err);
+    }
+  };
+
+  const handleSendMessage = useCallback(async (content: string, calendar?: string) => {
+    const userMsg: ChatMessage = {
+      id: crypto.randomUUID(),
       role: 'user',
-      content: input,
-      timestamp: new Date().toISOString(),
+      content,
+      timestamp: new Date(),
     };
-    setMessages((prev) => [...prev, newMessage]);
+    setMessages(prev => [...prev, userMsg]);
     setIsSending(true);
 
     try {
-      const response = await fetch('/api/chat', {
+      const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: input, calendarText: calendarText || undefined }),
-      });
-
-      if (!response.ok) {
-        const body = await response.json();
-        throw new Error(body.error || 'Chat request failed');
-      }
-
-      const data = await response.json();
-      const assistantMsg: ChatMessage = {
-        role: 'assistant',
-        content: data.reasoning,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
-
-      const operations: ProposedOperation[] = data.proposedOperations ?? [];
-      setPendingOps({ messageId: data.messageId, operations });
-
-      const defaultSelections = operations.reduce<OperationSelection>((acc, _, index) => {
-        acc[index] = true;
-        return acc;
-      }, {});
-      setOperationSelections(defaultSelections);
-      setInput('');
-      setCalendarText('');
-    } catch (err: any) {
-      setError(err.message || 'Failed to send message');
-    } finally {
-      setIsSending(false);
-    }
-  };
-
-  const handleConfirm = async () => {
-    if (!pendingOps) return;
-
-    const selectedIndexes = Object.entries(operationSelections)
-      .filter(([, selected]) => selected)
-      .map(([idx]) => Number(idx))
-      .sort((a, b) => a - b);
-
-    try {
-      const response = await fetch('/api/chat/confirm', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messageId: pendingOps.messageId,
-          acceptedOperationIndexes: selectedIndexes,
+        body: JSON.stringify({ 
+          message: content,
+          calendarText: calendar,
         }),
       });
 
-      if (!response.ok) {
-        const body = await response.json();
-        throw new Error(body.error || 'Confirm request failed');
+      if (!res.ok) {
+        throw new Error(`Chat failed: ${res.status}`);
       }
 
-      const result = await response.json();
-      setStatusMessage(result.message || 'Operations processed');
-      setPendingOps(null);
-      setOperationSelections({});
-      await refreshState();
-    } catch (err: any) {
-      setError(err.message || 'Failed to confirm operations');
+      const data = await res.json();
+
+      const assistantMsg: ChatMessage = {
+        id: data.messageId || crypto.randomUUID(),
+        role: 'assistant',
+        content: data.reasoning || 'I understand. Let me help with that.',
+        proposedOperations: data.proposedOperations,
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, assistantMsg]);
+
+      if (data.proposedOperations && data.proposedOperations.length > 0) {
+        setPendingOperations(data.proposedOperations);
+        setPendingMessageId(data.messageId);
+      }
+
+    } catch (err) {
+      console.error('Chat error:', err);
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: 'Sorry, there was an error processing your request. Please try again.',
+        timestamp: new Date(),
+      }]);
+    } finally {
+      setIsSending(false);
     }
-  };
+  }, []);
 
-  const handleReject = () => {
-    setPendingOps(null);
-    setOperationSelections({});
-    setStatusMessage('Dismissed proposed operations');
-  };
+  const handleConfirmOperations = useCallback(async (indexes: number[]) => {
+    if (!pendingMessageId) return;
 
-  const toggleSelection = (index: number) => {
-    setOperationSelections((prev) => ({
-      ...prev,
-      [index]: !(prev[index] ?? true),
-    }));
-  };
+    try {
+      const res = await fetch('/api/chat/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messageId: pendingMessageId,
+          acceptedOperationIndexes: indexes,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Confirm failed: ${res.status}`);
+      }
+
+      const data = await res.json();
+
+      // Add confirmation message
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: data.success 
+          ? `✓ ${indexes.length} operation(s) completed successfully.`
+          : `⚠ Some operations failed. Please check and try again.`,
+        timestamp: new Date(),
+      }]);
+
+      // Refresh data
+      await fetchTasks();
+      await fetchPlan();
+
+    } catch (err) {
+      console.error('Confirm error:', err);
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: 'Failed to confirm operations. Please try again.',
+        timestamp: new Date(),
+      }]);
+    } finally {
+      setPendingOperations(null);
+      setPendingMessageId(null);
+    }
+  }, [pendingMessageId]);
+
+  const handleDismissOperations = useCallback(() => {
+    setPendingOperations(null);
+    setPendingMessageId(null);
+    setMessages(prev => [...prev, {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: 'Operations dismissed. How else can I help?',
+      timestamp: new Date(),
+    }]);
+  }, []);
+
+  const handleSelectTask = useCallback((task: Task) => {
+    setFocusTask(task);
+    setTaskDrawerOpen(false);
+  }, []);
+
+  const handleCompleteTask = useCallback(async () => {
+    if (!focusTask) return;
+    await handleSendMessage(`Complete the task "${focusTask.title}"`);
+    setChatVisible(true);
+  }, [focusTask, handleSendMessage]);
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div>
-          <h1>ProfFlow</h1>
-          <p>Plan your day with the AI-first productivity workspace.</p>
+    <div className="min-h-screen h-screen overflow-hidden bg-slate-950 text-slate-100">
+      {/* Background */}
+      <AmbientBackground />
+
+      {/* Task Drawer (Left - slides in) */}
+      <TaskDrawer
+        isOpen={taskDrawerOpen}
+        onToggle={() => setTaskDrawerOpen(!taskDrawerOpen)}
+        tasks={tasks}
+        onSelectTask={handleSelectTask}
+      />
+
+      {/* Main Content Area */}
+      <div className="relative z-10 h-full flex">
+        {/* Spacer for left toggle button */}
+        <div className="w-16 flex-shrink-0" />
+
+        {/* Center Content */}
+        <main className="flex-1 flex flex-col items-center justify-end p-8 pb-12">
+          <FocusTask task={focusTask} onComplete={handleCompleteTask} />
+        </main>
+
+        {/* Schedule Panel (Right - always visible) */}
+        <div className="h-full flex-shrink-0">
+          <SchedulePanel
+            plan={plan}
+            tasks={tasks}
+            currentTime={currentTime}
+          />
         </div>
-        <button className="refresh-button" onClick={refreshState} type="button">
-          Refresh Data
-        </button>
-      </header>
+      </div>
 
-      <main className="layout-grid">
-        <section className="category-panel">
-          <h2>Category Panels</h2>
-          {Object.entries(CATEGORY_LABELS).map(([key, label]) => (
-            <div key={key} className="category-section">
-              <div className="category-title">{label}</div>
-              {groupedTasks[key]?.length ? (
-                groupedTasks[key].map((task) => <TaskCard key={task.id} task={task} />)
-              ) : (
-                <p className="empty-state">No tasks in this category yet.</p>
-              )}
-            </div>
-          ))}
-        </section>
+      {/* Chat Overlay (Center - modal) */}
+      <ChatOverlay
+        isVisible={chatVisible}
+        onToggle={() => setChatVisible(!chatVisible)}
+        messages={messages}
+        onSendMessage={handleSendMessage}
+        isSending={isSending}
+        pendingOperations={pendingOperations}
+        onConfirmOperations={handleConfirmOperations}
+        onDismissOperations={handleDismissOperations}
+      />
 
-        <section className="chat-panel">
-          <div className="chat-thread">
-            {messages.length === 0 ? (
-              <div className="empty-state">
-                Start by telling ProfFlow what you need help with today.
-              </div>
-            ) : (
-              messages.map((message, index) => (
-                <div key={`${message.timestamp}-${index}`} className={`chat-message ${message.role}`}>
-                  <div className="chat-role">{message.role === 'user' ? 'You' : 'ProfFlow'}</div>
-                  <div className="chat-bubble">{message.content}</div>
-                </div>
-              ))
-            )}
-          </div>
+      {/* Chat Toggle Button (Floating) */}
+      {!chatVisible && (
+        <ChatToggle 
+          onClick={() => setChatVisible(true)} 
+          hasUnread={pendingOperations !== null}
+        />
+      )}
 
-          {pendingOps ? (
-            <div className="proposed-panel">
-              <ProposedOperationsList
-                pending={pendingOps}
-                selections={operationSelections}
-                onToggle={toggleSelection}
-              />
-              <div className="proposed-actions">
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={handleConfirm}
-                  disabled={isSending}
-                >
-                  Confirm Selected
-                </button>
-                <button type="button" onClick={handleReject} disabled={isSending}>
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="chat-input">
-            <textarea
-              placeholder="Type or dictate your request..."
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              rows={3}
-            />
-            <textarea
-              placeholder="Optional calendar paste (e.g., 2pm-3pm: Meeting)"
-              value={calendarText}
-              onChange={(event) => setCalendarText(event.target.value)}
-              rows={2}
-            />
-            <button type="button" onClick={handleSend} disabled={isSending}>
-              {isSending ? 'Sending...' : 'Send to ProfFlow'}
-            </button>
-            {error ? <p className="error-text">{error}</p> : null}
-            {statusMessage ? <p className="status-text">{statusMessage}</p> : null}
-          </div>
-        </section>
-
-        <section className="sidebar-panel">
-          <div className="now-queue">
-            <h2>Now Queue</h2>
-            {nowQueue.length === 0 ? (
-              <p className="empty-state">No active tasks queued right now.</p>
-            ) : (
-              nowQueue.map((task) => <TaskCard key={task.id} task={task} />)
-            )}
-          </div>
-
-          <div className="schedule-view">
-            <h2>Schedule for {planDate || 'Today'}</h2>
-            {plan && plan.scheduleBlocks.length > 0 ? (
-              plan.scheduleBlocks.map((block) => (
-                <ScheduleBlockCard key={`${block.start}-${block.label}`} block={block} />
-              ))
-            ) : (
-              <p className="empty-state">No schedule created for today yet.</p>
-            )}
-          </div>
-        </section>
-      </main>
+      {/* Version indicator */}
+      <div className="fixed bottom-4 left-4 z-10">
+        <p className="text-slate-600 text-xs font-mono">PROFFLOW v1.8 // AMBIENT</p>
+      </div>
     </div>
   );
 }
