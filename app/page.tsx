@@ -72,6 +72,33 @@ const BLOCK_TYPE_STYLES = {
   life: { bg: 'bg-rose-500/20', border: 'border-rose-500/40', label: 'Life' },
 } as const;
 
+const SCHEDULE_OFFSET_MIN = -1;
+const SCHEDULE_OFFSET_MAX = 2;
+
+function getLocalDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getDateAtLocalMidnight(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addDaysLocal(base: Date, days: number): Date {
+  const date = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
+function getScheduleOffsetTag(offset: number): string {
+  if (offset === -1) return 'YESTERDAY';
+  if (offset === 0) return 'TODAY';
+  if (offset === 1) return 'TOMORROW';
+  return `+${offset}`;
+}
+
 // ============================================
 // GLASS PANEL COMPONENT
 // ============================================
@@ -312,45 +339,122 @@ function SchedulePanel({
   plan,
   tasks,
   currentTime,
+  viewDate,
+  offset,
+  canPrevDay,
+  canNextDay,
+  onPrevDay,
+  onNextDay,
+  onGoToday,
+  isLoading,
+  error,
 }: {
   onClose?: () => void;
   plan: Plan | null;
   tasks: Task[];
   currentTime: Date;
+  viewDate: Date;
+  offset: number;
+  canPrevDay: boolean;
+  canNextDay: boolean;
+  onPrevDay: () => void;
+  onNextDay: () => void;
+  onGoToday: () => void;
+  isLoading: boolean;
+  error: string | null;
 }) {
   const scheduleBlocks = plan?.scheduleBlocks || [];
   const taskMap = tasks.reduce((acc, t) => ({ ...acc, [t.id]: t }), {} as Record<string, Task>);
+  const viewDateLabel = viewDate
+    .toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+    })
+    .toUpperCase();
+  const offsetTag = getScheduleOffsetTag(offset);
 
   return (
     <GlassPanel className="w-72 h-full flex flex-col rounded-r-none" glow>
       {/* Header */}
       <div className="p-4 border-b border-slate-700/50">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-amber-400 text-sm font-mono">◇</span>
-              <h2 className="text-slate-200 font-semibold tracking-wide">DAILY SCHEDULE</h2>
-            </div>
-            <p className="text-slate-500 text-xs font-mono">
-              {currentTime
-                .toLocaleDateString('en-US', {
-                  weekday: 'long',
-                  month: 'short',
-                  day: 'numeric',
-                })
-                .toUpperCase()}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-amber-400 text-sm font-mono">◇</span>
+            <h2 className="text-slate-200 font-semibold tracking-wide">DAILY SCHEDULE</h2>
+          </div>
+          <div className="flex items-center gap-1">
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="text-slate-500 hover:text-slate-300 transition-colors p-1"
+                aria-label="Close schedule"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Day navigator */}
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            onClick={onPrevDay}
+            disabled={!canPrevDay || isLoading}
+            className="
+              w-8 h-8 rounded
+              bg-slate-800/30 hover:bg-slate-700/50
+              border border-slate-700/40 hover:border-cyan-500/30
+              text-slate-400 hover:text-cyan-400
+              transition-all duration-200
+              disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-slate-400 disabled:hover:bg-slate-800/30
+            "
+            aria-label="Previous day"
+          >
+            ◀
+          </button>
+
+          <div className="flex-1 min-w-0 text-center">
+            <p className="text-slate-500 text-xs font-mono truncate">{viewDateLabel}</p>
+            <p className="text-slate-600 text-[10px] font-mono tracking-[0.2em] mt-0.5">
+              {offsetTag}
             </p>
           </div>
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="text-slate-500 hover:text-slate-300 transition-colors p-1"
-              aria-label="Close schedule"
-            >
-              ✕
-            </button>
-          )}
+
+          <button
+            onClick={onNextDay}
+            disabled={!canNextDay || isLoading}
+            className="
+              w-8 h-8 rounded
+              bg-slate-800/30 hover:bg-slate-700/50
+              border border-slate-700/40 hover:border-cyan-500/30
+              text-slate-400 hover:text-cyan-400
+              transition-all duration-200
+              disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-slate-400 disabled:hover:bg-slate-800/30
+            "
+            aria-label="Next day"
+          >
+            ▶
+          </button>
         </div>
+
+        {offset !== 0 && (
+          <button
+            onClick={onGoToday}
+            disabled={isLoading}
+            className="
+              mt-2 w-full py-1.5 rounded
+              bg-slate-800/20 hover:bg-slate-800/40
+              border border-slate-700/30 hover:border-slate-600/50
+              text-slate-400 hover:text-slate-200
+              text-xs font-mono uppercase tracking-wider
+              transition-all duration-200
+              disabled:opacity-40 disabled:cursor-not-allowed
+            "
+          >
+            Today
+          </button>
+        )}
       </div>
 
       {/* Current time display */}
@@ -362,7 +466,15 @@ function SchedulePanel({
 
       {/* Timeline */}
       <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
-        {scheduleBlocks.length === 0 ? (
+        {isLoading ? (
+          <div className="flex items-center justify-center h-full">
+            <p className="text-slate-600 text-sm font-mono">Loading…</p>
+          </div>
+        ) : error ? (
+          <div className="flex items-center justify-center h-full">
+            <p className="text-rose-400 text-sm font-mono text-center">{error}</p>
+          </div>
+        ) : scheduleBlocks.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-slate-600 text-sm italic">No schedule planned</p>
           </div>
@@ -406,7 +518,7 @@ function SchedulePanel({
       {/* Footer */}
       <div className="p-4 border-t border-slate-700/50">
         <p className="text-slate-600 text-xs font-mono text-center">
-          {scheduleBlocks.length} BLOCKS SCHEDULED
+          {isLoading ? 'LOADING' : error ? 'ERROR' : `${scheduleBlocks.length} BLOCKS SCHEDULED`}
         </p>
       </div>
     </GlassPanel>
@@ -423,12 +535,30 @@ function ScheduleDrawer({
   plan,
   tasks,
   currentTime,
+  viewDate,
+  offset,
+  canPrevDay,
+  canNextDay,
+  onPrevDay,
+  onNextDay,
+  onGoToday,
+  isLoading,
+  error,
 }: {
   isOpen: boolean;
   onToggle: () => void;
   plan: Plan | null;
   tasks: Task[];
   currentTime: Date;
+  viewDate: Date;
+  offset: number;
+  canPrevDay: boolean;
+  canNextDay: boolean;
+  onPrevDay: () => void;
+  onNextDay: () => void;
+  onGoToday: () => void;
+  isLoading: boolean;
+  error: string | null;
 }) {
   return (
     <>
@@ -463,7 +593,21 @@ function ScheduleDrawer({
           ${isOpen ? 'translate-x-0' : 'translate-x-full'}
         `}
       >
-        <SchedulePanel onClose={onToggle} plan={plan} tasks={tasks} currentTime={currentTime} />
+        <SchedulePanel
+          onClose={onToggle}
+          plan={plan}
+          tasks={tasks}
+          currentTime={currentTime}
+          viewDate={viewDate}
+          offset={offset}
+          canPrevDay={canPrevDay}
+          canNextDay={canNextDay}
+          onPrevDay={onPrevDay}
+          onNextDay={onNextDay}
+          onGoToday={onGoToday}
+          isLoading={isLoading}
+          error={error}
+        />
       </div>
 
       {/* Backdrop overlay when drawer is open */}
@@ -925,6 +1069,12 @@ export default function ProfFlowPage() {
   const [plan, setPlan] = useState<Plan | null>(null);
   const [focusTask, setFocusTask] = useState<Task | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [scheduleOffset, setScheduleOffset] = useState(0);
+  const [scheduleViewPlan, setScheduleViewPlan] = useState<Plan | null>(null);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const schedulePlanCacheRef = useRef<Record<string, Plan | null>>({});
+  const [scheduleReloadNonce, setScheduleReloadNonce] = useState(0);
 
   // UI State
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
@@ -935,6 +1085,12 @@ export default function ProfFlowPage() {
   const [isSending, setIsSending] = useState(false);
   const [pendingOperations, setPendingOperations] = useState<ProposedOperation[] | null>(null);
   const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
+
+  const todayDate = getDateAtLocalMidnight(currentTime);
+  const scheduleViewDate = addDaysLocal(todayDate, scheduleOffset);
+  const scheduleViewDateKey = getLocalDateKey(scheduleViewDate);
+  const canPrevScheduleDay = scheduleOffset > SCHEDULE_OFFSET_MIN;
+  const canNextScheduleDay = scheduleOffset < SCHEDULE_OFFSET_MAX;
 
   // Update time every minute
   useEffect(() => {
@@ -947,6 +1103,53 @@ export default function ProfFlowPage() {
     fetchTasks();
     fetchPlan();
   }, []);
+
+  // Load plan for the schedule viewer day (separate from today's plan used for focus).
+  useEffect(() => {
+    const dateKey = scheduleViewDateKey;
+
+    if (scheduleOffset === 0) {
+      schedulePlanCacheRef.current[dateKey] = plan ?? null;
+      setScheduleViewPlan(plan ?? null);
+      setScheduleLoading(false);
+      setScheduleError(null);
+      return;
+    }
+
+    const cache = schedulePlanCacheRef.current;
+    if (Object.prototype.hasOwnProperty.call(cache, dateKey)) {
+      setScheduleViewPlan(cache[dateKey] ?? null);
+      setScheduleLoading(false);
+      setScheduleError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    setScheduleLoading(true);
+    setScheduleError(null);
+
+    fetch(`/api/plans/today?date=${encodeURIComponent(dateKey)}`, { signal: controller.signal })
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(`Failed to fetch plan: ${res.status}`);
+        }
+        const data = await res.json();
+        const fetchedPlan = (data.plan ?? null) as Plan | null;
+        schedulePlanCacheRef.current[dateKey] = fetchedPlan;
+        setScheduleViewPlan(fetchedPlan);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        console.error('Failed to fetch schedule plan:', err);
+        setScheduleError('Failed to load schedule');
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setScheduleLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [plan, scheduleOffset, scheduleViewDateKey, scheduleReloadNonce]);
 
   // Set focus task from plan's top ranked task
   useEffect(() => {
@@ -985,6 +1188,23 @@ export default function ProfFlowPage() {
     } catch (err) {
       console.error('Failed to fetch plan:', err);
     }
+  };
+
+  const refreshScheduleView = () => {
+    schedulePlanCacheRef.current = {};
+    setScheduleReloadNonce((n) => n + 1);
+  };
+
+  const handlePrevScheduleDay = () => {
+    setScheduleOffset((prev) => Math.max(SCHEDULE_OFFSET_MIN, prev - 1));
+  };
+
+  const handleNextScheduleDay = () => {
+    setScheduleOffset((prev) => Math.min(SCHEDULE_OFFSET_MAX, prev + 1));
+  };
+
+  const handleGoToTodaySchedule = () => {
+    setScheduleOffset(0);
   };
 
   const handleSendMessage = useCallback(async (content: string, calendar?: string) => {
@@ -1072,6 +1292,7 @@ export default function ProfFlowPage() {
       // Refresh data
       await fetchTasks();
       await fetchPlan();
+      refreshScheduleView();
 
     } catch (err) {
       console.error('Confirm error:', err);
@@ -1126,9 +1347,18 @@ export default function ProfFlowPage() {
       <ScheduleDrawer
         isOpen={scheduleDrawerOpen}
         onToggle={() => setScheduleDrawerOpen(!scheduleDrawerOpen)}
-        plan={plan}
+        plan={scheduleViewPlan}
         tasks={tasks}
         currentTime={currentTime}
+        viewDate={scheduleViewDate}
+        offset={scheduleOffset}
+        canPrevDay={canPrevScheduleDay}
+        canNextDay={canNextScheduleDay}
+        onPrevDay={handlePrevScheduleDay}
+        onNextDay={handleNextScheduleDay}
+        onGoToday={handleGoToTodaySchedule}
+        isLoading={scheduleLoading}
+        error={scheduleError}
       />
 
       {/* Focus Drawer (Bottom - slides up) */}
