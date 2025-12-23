@@ -108,7 +108,7 @@ function GlassPanel({
 // AMBIENT BACKGROUND
 // ============================================
 
-function AmbientBackground() {
+function AmbientBackground({ dim }: { dim: boolean }) {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
 
@@ -123,7 +123,7 @@ function AmbientBackground() {
     <div className="fixed inset-0 z-0">
       {/* Gradient fallback - always visible as base */}
       <div className="absolute inset-0 bg-gradient-to-b from-slate-900 via-slate-950 to-black" />
-      
+
       {/* Atmospheric effects for fallback */}
       {imageError && (
         <>
@@ -135,25 +135,29 @@ function AmbientBackground() {
 
       {/* Actual background image */}
       {imageLoaded && !imageError && (
-        <div 
+        <div
           className="absolute inset-0 bg-cover bg-center bg-no-repeat transition-opacity duration-1000"
           style={{ backgroundImage: `url('/backgrounds/ambient-outpost.jpg')` }}
         />
       )}
-      
-      {/* Gradient overlay for text readability */}
-      <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/50 to-slate-950/30" />
-      
-      {/* Vignette effect */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,rgba(0,0,0,0.4)_100%)]" />
-      
-      {/* Noise texture */}
-      <div 
-        className="absolute inset-0 opacity-[0.03] pointer-events-none"
-        style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
-        }}
-      />
+
+      {dim && (
+        <>
+          {/* Gradient overlay for text readability */}
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/25 via-slate-950/10 to-transparent" />
+
+          {/* Vignette effect */}
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,rgba(0,0,0,0.18)_100%)]" />
+
+          {/* Noise texture */}
+          <div
+            className="absolute inset-0 opacity-[0.02] pointer-events-none"
+            style={{
+              backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
+            }}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -291,7 +295,7 @@ function TaskDrawer({
       {/* Backdrop overlay when drawer is open */}
       {isOpen && (
         <div 
-          className="fixed inset-0 bg-black/20 backdrop-blur-sm z-30"
+          className="fixed inset-0 bg-black/[0.06] z-30"
           onClick={onToggle}
         />
       )}
@@ -304,10 +308,12 @@ function TaskDrawer({
 // ============================================
 
 function SchedulePanel({
+  onClose,
   plan,
   tasks,
   currentTime,
 }: {
+  onClose?: () => void;
   plan: Plan | null;
   tasks: Task[];
   currentTime: Date;
@@ -319,17 +325,32 @@ function SchedulePanel({
     <GlassPanel className="w-72 h-full flex flex-col rounded-r-none" glow>
       {/* Header */}
       <div className="p-4 border-b border-slate-700/50">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-amber-400 text-sm font-mono">◇</span>
-          <h2 className="text-slate-200 font-semibold tracking-wide">DAILY SCHEDULE</h2>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-amber-400 text-sm font-mono">◇</span>
+              <h2 className="text-slate-200 font-semibold tracking-wide">DAILY SCHEDULE</h2>
+            </div>
+            <p className="text-slate-500 text-xs font-mono">
+              {currentTime
+                .toLocaleDateString('en-US', {
+                  weekday: 'long',
+                  month: 'short',
+                  day: 'numeric',
+                })
+                .toUpperCase()}
+            </p>
+          </div>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="text-slate-500 hover:text-slate-300 transition-colors p-1"
+              aria-label="Close schedule"
+            >
+              ✕
+            </button>
+          )}
         </div>
-        <p className="text-slate-500 text-xs font-mono">
-          {currentTime.toLocaleDateString('en-US', { 
-            weekday: 'long', 
-            month: 'short', 
-            day: 'numeric' 
-          }).toUpperCase()}
-        </p>
       </div>
 
       {/* Current time display */}
@@ -389,6 +410,70 @@ function SchedulePanel({
         </p>
       </div>
     </GlassPanel>
+  );
+}
+
+// ============================================
+// SCHEDULE DRAWER (RIGHT - SLIDES IN)
+// ============================================
+
+function ScheduleDrawer({
+  isOpen,
+  onToggle,
+  plan,
+  tasks,
+  currentTime,
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+  plan: Plan | null;
+  tasks: Task[];
+  currentTime: Date;
+}) {
+  return (
+    <>
+      {/* Toggle Button - visible when drawer is closed */}
+      <button
+        onClick={onToggle}
+        className={`
+          fixed right-4 top-1/2 -translate-y-1/2 z-50
+          w-12 h-24
+          bg-slate-900/80 backdrop-blur-md
+          border border-slate-700/50
+          rounded-l-lg
+          flex items-center justify-center
+          transition-all duration-300
+          hover:bg-slate-800/80 hover:border-cyan-500/30
+          group
+          ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
+        `}
+        style={{ WebkitBackdropFilter: 'blur(12px)' }}
+        aria-label="Open schedule"
+      >
+        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-lg">
+          ◀
+        </span>
+      </button>
+
+      {/* Drawer Panel */}
+      <div
+        className={`
+          fixed right-0 top-0 h-full z-40
+          transition-transform duration-500 ease-out
+          ${isOpen ? 'translate-x-0' : 'translate-x-full'}
+        `}
+      >
+        <SchedulePanel onClose={onToggle} plan={plan} tasks={tasks} currentTime={currentTime} />
+      </div>
+
+      {/* Backdrop overlay when drawer is open */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 bg-black/[0.06] z-30"
+          onClick={onToggle}
+        />
+      )}
+    </>
   );
 }
 
@@ -632,9 +717,11 @@ function ChatOverlay({
 // ============================================
 
 function FocusTask({
+  onClose,
   task,
   onComplete,
 }: {
+  onClose?: () => void;
   task: Task | null;
   onComplete: () => void;
 }) {
@@ -642,6 +729,15 @@ function FocusTask({
     return (
       <div className="w-full max-w-xl">
         <GlassPanel className="p-6 text-center">
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="absolute top-3 right-3 text-slate-500 hover:text-slate-300 transition-colors p-1"
+              aria-label="Close current focus"
+            >
+              ✕
+            </button>
+          )}
           <p className="text-slate-500 text-sm italic">No focus task selected</p>
           <p className="text-slate-600 text-xs mt-2">Open the task panel or use chat to set your focus</p>
         </GlassPanel>
@@ -654,6 +750,15 @@ function FocusTask({
   return (
     <div className="w-full max-w-xl">
       <GlassPanel className="p-6 border-cyan-500/30" glow>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="absolute top-3 right-3 text-slate-500 hover:text-slate-300 transition-colors p-1"
+            aria-label="Close current focus"
+          >
+            ✕
+          </button>
+        )}
         {/* Status indicator */}
         <div className="flex items-center gap-2 mb-3">
           <div className="flex items-center gap-1">
@@ -705,15 +810,89 @@ function FocusTask({
 }
 
 // ============================================
+// FOCUS DRAWER (BOTTOM CENTER - SLIDES UP)
+// ============================================
+
+function FocusDrawer({
+  isOpen,
+  onToggle,
+  task,
+  onComplete,
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+  task: Task | null;
+  onComplete: () => void;
+}) {
+  return (
+    <>
+      {/* Toggle Button - visible when drawer is closed */}
+      <button
+        onClick={onToggle}
+        className={`
+          fixed bottom-4 left-1/2 -translate-x-1/2 z-50
+          px-6 py-3
+          bg-slate-900/80 backdrop-blur-md
+          border border-slate-700/50
+          rounded-t-lg
+          flex items-center justify-center gap-2
+          transition-all duration-300
+          hover:bg-slate-800/80 hover:border-cyan-500/30
+          group
+          ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
+        `}
+        style={{ WebkitBackdropFilter: 'blur(12px)' }}
+        aria-label="Open current focus"
+      >
+        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-sm">
+          ▲
+        </span>
+        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-xs font-mono uppercase tracking-wider">
+          Current Focus
+        </span>
+      </button>
+
+      {/* Drawer Panel */}
+      <div
+        className={`
+          fixed inset-x-0 bottom-0 z-40
+          flex justify-center px-4 pb-8
+          transition-transform duration-500 ease-out
+          ${isOpen ? 'translate-y-0' : 'translate-y-full'}
+        `}
+      >
+        <FocusTask task={task} onComplete={onComplete} onClose={onToggle} />
+      </div>
+
+      {/* Backdrop overlay when drawer is open */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 bg-black/[0.06] z-30"
+          onClick={onToggle}
+        />
+      )}
+    </>
+  );
+}
+
+// ============================================
 // CHAT TOGGLE BUTTON (FLOATING)
 // ============================================
 
-function ChatToggle({ onClick, hasUnread }: { onClick: () => void; hasUnread: boolean }) {
+function ChatToggle({
+  onClick,
+  hasUnread,
+  rightOffsetClass,
+}: {
+  onClick: () => void;
+  hasUnread: boolean;
+  rightOffsetClass: string;
+}) {
   return (
     <button
       onClick={onClick}
-      className="
-        fixed bottom-8 right-80 z-20
+      className={`
+        fixed bottom-8 ${rightOffsetClass} z-50
         w-14 h-14 rounded-full
         bg-slate-900/80 backdrop-blur-md
         border border-slate-700/50
@@ -722,7 +901,7 @@ function ChatToggle({ onClick, hasUnread }: { onClick: () => void; hasUnread: bo
         transition-all duration-300
         group
         shadow-lg
-      "
+      `}
       style={{ WebkitBackdropFilter: 'blur(12px)' }}
       aria-label="Toggle chat"
     >
@@ -749,6 +928,8 @@ export default function ProfFlowPage() {
 
   // UI State
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
+  const [scheduleDrawerOpen, setScheduleDrawerOpen] = useState(false);
+  const [focusDrawerOpen, setFocusDrawerOpen] = useState(false);
   const [chatVisible, setChatVisible] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = useState(false);
@@ -931,7 +1112,7 @@ export default function ProfFlowPage() {
   return (
     <div className="min-h-screen h-screen overflow-hidden bg-slate-950 text-slate-100">
       {/* Background */}
-      <AmbientBackground />
+      <AmbientBackground dim={taskDrawerOpen || scheduleDrawerOpen || focusDrawerOpen} />
 
       {/* Task Drawer (Left - slides in) */}
       <TaskDrawer
@@ -941,24 +1122,30 @@ export default function ProfFlowPage() {
         onSelectTask={handleSelectTask}
       />
 
+      {/* Schedule Drawer (Right - slides in) */}
+      <ScheduleDrawer
+        isOpen={scheduleDrawerOpen}
+        onToggle={() => setScheduleDrawerOpen(!scheduleDrawerOpen)}
+        plan={plan}
+        tasks={tasks}
+        currentTime={currentTime}
+      />
+
+      {/* Focus Drawer (Bottom - slides up) */}
+      <FocusDrawer
+        isOpen={focusDrawerOpen}
+        onToggle={() => setFocusDrawerOpen(!focusDrawerOpen)}
+        task={focusTask}
+        onComplete={handleCompleteTask}
+      />
+
       {/* Main Content Area */}
       <div className="relative z-10 h-full flex">
         {/* Spacer for left toggle button */}
         <div className="w-16 flex-shrink-0" />
 
         {/* Center Content */}
-        <main className="flex-1 flex flex-col items-center justify-end p-8 pb-12">
-          <FocusTask task={focusTask} onComplete={handleCompleteTask} />
-        </main>
-
-        {/* Schedule Panel (Right - always visible) */}
-        <div className="h-full flex-shrink-0">
-          <SchedulePanel
-            plan={plan}
-            tasks={tasks}
-            currentTime={currentTime}
-          />
-        </div>
+        <main className="flex-1" />
       </div>
 
       {/* Chat Overlay (Center - modal) */}
@@ -978,6 +1165,7 @@ export default function ProfFlowPage() {
         <ChatToggle 
           onClick={() => setChatVisible(true)} 
           hasUnread={pendingOperations !== null}
+          rightOffsetClass={scheduleDrawerOpen ? 'right-80' : 'right-8'}
         />
       )}
 
