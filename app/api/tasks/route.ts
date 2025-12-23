@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import * as data from '@/lib/data';
 import { requireValidOrigin } from '@/lib/middleware/security';
+import { getLocalDateString } from '@/lib/utils/date';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,7 +24,7 @@ const CreateTaskRequestSchema = z
 
 export async function GET() {
   try {
-    const tasks = await data.getTasks();
+    const tasks = await data.getTasksWithCompletions(getLocalDateString());
     return NextResponse.json({ tasks });
   } catch (error: any) {
     return NextResponse.json({ error: 'Failed to fetch tasks', details: error.message }, { status: 500 });

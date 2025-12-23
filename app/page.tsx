@@ -1,6 +1,27 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverEvent,
+  DragStartEvent,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 // ============================================
 // TYPES
@@ -18,6 +39,7 @@ interface Task {
   recurrenceRule: string | null;
   createdAt: string;
   updatedAt: string;
+  completedToday?: boolean;
 }
 
 interface ScheduleBlock {
@@ -63,6 +85,8 @@ const CATEGORY_CONFIG = {
   family: { label: 'Family', icon: '◉', color: 'text-rose-400' },
   health: { label: 'Health', icon: '◐', color: 'text-emerald-400' },
 } as const;
+
+type TaskCategoryKey = keyof typeof CATEGORY_CONFIG;
 
 const BLOCK_TYPE_STYLES = {
   deep_work: { bg: 'bg-cyan-500/20', border: 'border-cyan-500/40', label: 'Deep Work' },
@@ -193,24 +217,290 @@ function AmbientBackground({ dim }: { dim: boolean }) {
 // TASK DRAWER (LEFT - SLIDES IN)
 // ============================================
 
+function CategoryDropZone({ id, children }: { id: TaskCategoryKey; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`
+        rounded-lg
+        ${isOver ? 'bg-cyan-500/5 ring-1 ring-cyan-500/20' : ''}
+      `}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SortableManifestTask({
+  task,
+  onSelectTask,
+  onSetTaskCompleted,
+}: {
+  task: Task;
+  onSelectTask: (task: Task) => void;
+  onSetTaskCompleted: (task: Task, completed: boolean) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: task.id,
+  });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      onClick={() => onSelectTask(task)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') onSelectTask(task);
+      }}
+      role="button"
+      tabIndex={0}
+      className={`
+        w-full text-left p-2 rounded
+        bg-slate-800/30 hover:bg-slate-700/50
+        border border-transparent hover:border-slate-600/50
+        transition-all duration-200
+        group cursor-pointer
+        flex items-start gap-3
+        ${isDragging ? 'opacity-60' : ''}
+      `}
+    >
+      <div className="flex flex-col items-center gap-2 pt-0.5">
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          onClick={(e) => e.stopPropagation()}
+          className="
+            text-slate-600 group-hover:text-slate-400
+            cursor-grab active:cursor-grabbing
+            select-none
+          "
+          aria-label="Drag to reorder"
+        >
+          ⠿
+        </button>
+        <input
+          type="checkbox"
+          checked={false}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => {
+            e.stopPropagation();
+            if (e.target.checked) onSetTaskCompleted(task, true);
+          }}
+          className="accent-cyan-500"
+          aria-label={`Complete task: ${task.title}`}
+        />
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <p className="text-slate-300 text-sm group-hover:text-slate-100 transition-colors truncate">
+          {task.title}
+        </p>
+        {task.dueOn && (
+          <p className="text-slate-500 text-xs font-mono mt-1">
+            {task.dueTime ? `${task.dueOn} @ ${task.dueTime}` : task.dueOn}
+          </p>
+        )}
+        {task.recurrenceRule && (
+          <p className="text-slate-600 text-[10px] font-mono mt-1 uppercase tracking-wider">
+            Daily
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ManifestTaskOverlay({ task }: { task: Task }) {
+  return (
+    <div className="w-72">
+      <div className="p-2 rounded bg-slate-900/90 border border-slate-700/60 shadow-xl">
+        <p className="text-slate-200 text-sm truncate">{task.title}</p>
+        {task.recurrenceRule && (
+          <p className="text-slate-500 text-[10px] font-mono mt-1 uppercase tracking-wider">
+            Daily
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TaskDrawer({
   isOpen,
   onToggle,
   tasks,
   onSelectTask,
+  onSetTaskCompleted,
+  onUpdateManifestOrder,
 }: {
   isOpen: boolean;
   onToggle: () => void;
   tasks: Task[];
   onSelectTask: (task: Task) => void;
+  onSetTaskCompleted: (task: Task, completed: boolean) => void;
+  onUpdateManifestOrder: (orderByCategory: Record<TaskCategoryKey, string[]>) => Promise<void>;
 }) {
-  const tasksByCategory = tasks.reduce((acc, task) => {
-    if (task.status === 'active') {
-      if (!acc[task.category]) acc[task.category] = [];
-      acc[task.category].push(task);
+  const isCompletedToday = (task: Task) => Boolean(task.completedToday);
+  const isVisibleInManifest = (task: Task) =>
+    task.status === 'active' && !(task.recurrenceRule && isCompletedToday(task));
+
+  const categories = Object.keys(CATEGORY_CONFIG) as TaskCategoryKey[];
+
+  const buildManifestOrder = (taskList: Task[]): Record<TaskCategoryKey, string[]> => ({
+    research: taskList.filter((task) => isVisibleInManifest(task) && task.category === 'research').map((t) => t.id),
+    teaching_service: taskList
+      .filter((task) => isVisibleInManifest(task) && task.category === 'teaching_service')
+      .map((t) => t.id),
+    family: taskList.filter((task) => isVisibleInManifest(task) && task.category === 'family').map((t) => t.id),
+    health: taskList.filter((task) => isVisibleInManifest(task) && task.category === 'health').map((t) => t.id),
+  });
+
+  const [manifestOrder, setManifestOrder] = useState<Record<TaskCategoryKey, string[]>>(() =>
+    buildManifestOrder(tasks)
+  );
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const manifestSnapshotRef = useRef<Record<TaskCategoryKey, string[]> | null>(null);
+  const [manifestSaving, setManifestSaving] = useState(false);
+
+  useEffect(() => {
+    if (activeDragId) return;
+    setManifestOrder(buildManifestOrder(tasks));
+  }, [tasks, activeDragId]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const findContainer = (items: Record<TaskCategoryKey, string[]>, id: string): TaskCategoryKey | null => {
+    const maybeCategory = id as TaskCategoryKey;
+    if (categories.includes(maybeCategory)) return maybeCategory;
+    return categories.find((category) => items[category].includes(id)) ?? null;
+  };
+
+  const orderSignature = (order: Record<TaskCategoryKey, string[]>): string =>
+    categories.map((category) => `${category}:${order[category].join(',')}`).join('|');
+
+  const persistManifestOrder = async (orderByCategory: Record<TaskCategoryKey, string[]>) => {
+    setManifestSaving(true);
+    try {
+      await onUpdateManifestOrder(orderByCategory);
+    } finally {
+      setManifestSaving(false);
     }
-    return acc;
-  }, {} as Record<string, Task[]>);
+  };
+
+  const handleDragStart = ({ active }: DragStartEvent) => {
+    manifestSnapshotRef.current = manifestOrder;
+    setActiveDragId(String(active.id));
+  };
+
+  const handleDragOver = ({ active, over }: DragOverEvent) => {
+    if (!over) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+
+    setManifestOrder((prev) => {
+      const activeContainer = findContainer(prev, activeId);
+      const overContainer = findContainer(prev, overId);
+      if (!activeContainer || !overContainer) return prev;
+      if (activeContainer === overContainer) return prev;
+
+      const activeItems = prev[activeContainer];
+      const overItems = prev[overContainer];
+      if (!activeItems.includes(activeId)) return prev;
+
+      const nextActive = activeItems.filter((id) => id !== activeId);
+      const overIndex = overId === overContainer ? overItems.length : overItems.indexOf(overId);
+      const insertIndex = overIndex === -1 ? overItems.length : overIndex;
+      const nextOver = [
+        ...overItems.slice(0, insertIndex),
+        activeId,
+        ...overItems.slice(insertIndex),
+      ];
+
+      return {
+        ...prev,
+        [activeContainer]: nextActive,
+        [overContainer]: nextOver,
+      };
+    });
+  };
+
+  const handleDragCancel = () => {
+    if (manifestSnapshotRef.current) {
+      setManifestOrder(manifestSnapshotRef.current);
+    }
+    manifestSnapshotRef.current = null;
+    setActiveDragId(null);
+  };
+
+  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    const activeId = String(active.id);
+    setActiveDragId(null);
+
+    if (!over) {
+      if (manifestSnapshotRef.current) setManifestOrder(manifestSnapshotRef.current);
+      manifestSnapshotRef.current = null;
+      return;
+    }
+
+    const overId = String(over.id);
+    const snapshot = manifestSnapshotRef.current;
+    manifestSnapshotRef.current = null;
+
+    let nextOrder: Record<TaskCategoryKey, string[]> | null = null;
+
+    setManifestOrder((prev) => {
+      const activeContainer = findContainer(prev, activeId);
+      const overContainer = findContainer(prev, overId);
+      if (!activeContainer || !overContainer) {
+        nextOrder = prev;
+        return prev;
+      }
+
+      if (activeContainer !== overContainer) {
+        nextOrder = prev;
+        return prev;
+      }
+
+      const activeIndex = prev[activeContainer].indexOf(activeId);
+      const overIndex =
+        overId === overContainer
+          ? prev[overContainer].length - 1
+          : prev[overContainer].indexOf(overId);
+
+      if (activeIndex === -1 || overIndex === -1 || activeIndex === overIndex) {
+        nextOrder = prev;
+        return prev;
+      }
+
+      const updated = {
+        ...prev,
+        [overContainer]: arrayMove(prev[overContainer], activeIndex, overIndex),
+      };
+      nextOrder = updated;
+      return updated;
+    });
+
+    const candidate = nextOrder ?? manifestOrder;
+    if (snapshot && orderSignature(snapshot) === orderSignature(candidate)) {
+      return;
+    }
+    void persistManifestOrder(candidate);
+  };
+
+  const completedTodayTasks = tasks.filter((task) => isCompletedToday(task));
+  const [showCompleted, setShowCompleted] = useState(false);
+  const taskById = new Map(tasks.map((task) => [task.id, task]));
+  const activeDragTask = activeDragId ? taskById.get(activeDragId) : null;
 
   return (
     <>
@@ -251,6 +541,11 @@ function TaskDrawer({
             <div className="flex items-center gap-2">
               <span className="text-cyan-400 text-sm font-mono">◆</span>
               <h2 className="text-slate-200 font-semibold tracking-wide">TASK MANIFEST</h2>
+              {manifestSaving && (
+                <span className="text-slate-500 text-xs font-mono uppercase tracking-wider">
+                  Saving…
+                </span>
+              )}
             </div>
             <button
               onClick={onToggle}
@@ -263,57 +558,144 @@ function TaskDrawer({
 
           {/* Task Categories */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
-            {(Object.keys(CATEGORY_CONFIG) as Array<keyof typeof CATEGORY_CONFIG>).map((category) => {
-              const config = CATEGORY_CONFIG[category];
-              const categoryTasks = tasksByCategory[category] || [];
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDragCancel={handleDragCancel}
+              onDragEnd={handleDragEnd}
+            >
+              {categories.map((category) => {
+                const config = CATEGORY_CONFIG[category];
+                const taskIds = manifestOrder[category] ?? [];
+                return (
+                  <CategoryDropZone key={category} id={category}>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className={config.color}>{config.icon}</span>
+                        <span className="text-slate-400 font-mono uppercase tracking-wider text-xs">
+                          {config.label}
+                        </span>
+                        <span className="text-slate-600 text-xs">({taskIds.length})</span>
+                      </div>
 
-              return (
-                <div key={category} className="space-y-2">
-                  <div className="flex items-center gap-2 text-sm">
-                    <span className={config.color}>{config.icon}</span>
-                    <span className="text-slate-400 font-mono uppercase tracking-wider text-xs">
-                      {config.label}
-                    </span>
-                    <span className="text-slate-600 text-xs">({categoryTasks.length})</span>
-                  </div>
+                      <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
+                        {taskIds.length === 0 ? (
+                          <p className="text-slate-600 text-xs italic pl-5 py-2">
+                            Drop tasks here
+                          </p>
+                        ) : (
+                          <div className="space-y-1 pl-5">
+                            {taskIds.map((taskId) => {
+                              const task = taskById.get(taskId);
+                              if (!task) return null;
+                              return (
+                                <SortableManifestTask
+                                  key={taskId}
+                                  task={task}
+                                  onSelectTask={onSelectTask}
+                                  onSetTaskCompleted={onSetTaskCompleted}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+                      </SortableContext>
+                    </div>
+                  </CategoryDropZone>
+                );
+              })}
 
-                  {categoryTasks.length === 0 ? (
-                    <p className="text-slate-600 text-xs italic pl-5">No active tasks</p>
+              <DragOverlay>
+                {activeDragTask ? <ManifestTaskOverlay task={activeDragTask} /> : null}
+              </DragOverlay>
+            </DndContext>
+
+            <div className="pt-2 border-t border-slate-700/30">
+              <button
+                onClick={() => setShowCompleted((v) => !v)}
+                className="
+                  w-full flex items-center gap-2 py-2
+                  text-slate-400 hover:text-slate-200
+                  transition-colors
+                "
+              >
+                <span className="text-amber-400 text-xs font-mono">◆</span>
+                <span className="text-xs font-mono uppercase tracking-wider">
+                  Completed Today
+                </span>
+                <span className="text-slate-600 text-xs">({completedTodayTasks.length})</span>
+                <span className="ml-auto text-slate-600">
+                  {showCompleted ? '▼' : '▶'}
+                </span>
+              </button>
+
+              {showCompleted && (
+                <div className="pl-5 space-y-1">
+                  {completedTodayTasks.length === 0 ? (
+                    <p className="text-slate-600 text-xs italic py-2">
+                      Nothing completed yet
+                    </p>
                   ) : (
-                    <div className="space-y-1 pl-5">
-                      {categoryTasks.map((task) => (
-                        <button
-                          key={task.id}
-                          onClick={() => onSelectTask(task)}
-                          className="
-                            w-full text-left p-2 rounded
-                            bg-slate-800/30 hover:bg-slate-700/50
-                            border border-transparent hover:border-slate-600/50
-                            transition-all duration-200
-                            group
-                          "
-                        >
-                          <p className="text-slate-300 text-sm group-hover:text-slate-100 transition-colors">
+                    completedTodayTasks.map((task) => (
+                      <div
+                        key={task.id}
+                        onClick={() => onSelectTask(task)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') onSelectTask(task);
+                        }}
+                        role="button"
+                        tabIndex={0}
+                        className="
+                          w-full text-left p-2 rounded
+                          bg-slate-900/40 hover:bg-slate-900/60
+                          border border-slate-800/40 hover:border-slate-700/60
+                          transition-all duration-200
+                          group cursor-pointer
+                          flex items-start gap-3
+                        "
+                      >
+                        <div className="flex flex-col items-center gap-2 pt-0.5">
+                          <span
+                            className="text-slate-700 select-none"
+                            aria-hidden="true"
+                          >
+                            ·
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              if (!e.target.checked) onSetTaskCompleted(task, false);
+                            }}
+                            className="accent-cyan-500"
+                            aria-label={`Undo completion: ${task.title}`}
+                          />
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <p className="text-slate-400 text-sm truncate line-through">
                             {task.title}
                           </p>
-                          {task.dueOn && (
-                            <p className="text-slate-500 text-xs font-mono mt-1">
-                              {task.dueTime ? `${task.dueOn} @ ${task.dueTime}` : task.dueOn}
-                            </p>
-                          )}
-                        </button>
-                      ))}
-                    </div>
+                          <p className="text-slate-600 text-xs font-mono mt-1 uppercase tracking-wider">
+                            {task.recurrenceRule ? 'Completed today' : 'Completed'}
+                          </p>
+                        </div>
+                      </div>
+                    ))
                   )}
                 </div>
-              );
-            })}
+              )}
+            </div>
           </div>
 
           {/* Footer */}
           <div className="p-4 border-t border-slate-700/50">
             <p className="text-slate-600 text-xs font-mono text-center">
-              {tasks.filter(t => t.status === 'active').length} ACTIVE TASKS
+              {tasks.filter(isVisibleInManifest).length} ACTIVE TASKS
             </p>
           </div>
         </GlassPanel>
@@ -1153,20 +1535,39 @@ export default function ProfFlowPage() {
 
   // Set focus task from plan's top ranked task
   useEffect(() => {
-    if (plan && plan.rankedTaskIds.length > 0 && tasks.length > 0) {
-      const topTaskId = plan.rankedTaskIds[0];
-      const topTask = tasks.find(t => t.id === topTaskId && t.status === 'active');
-      if (topTask) {
-        setFocusTask(topTask);
-      }
-    } else if (tasks.length > 0 && !focusTask) {
-      // Fallback: use first active task if no plan
-      const firstActive = tasks.find(t => t.status === 'active');
-      if (firstActive) {
-        setFocusTask(firstActive);
+    if (tasks.length === 0) {
+      setFocusTask(null);
+      return;
+    }
+
+    const isEligible = (task: Task) =>
+      task.status === 'active' && !(task.recurrenceRule && task.completedToday);
+
+    if (focusTask) {
+      const refreshed = tasks.find((task) => task.id === focusTask.id) || null;
+      if (refreshed && isEligible(refreshed)) {
+        setFocusTask(refreshed);
+        return;
       }
     }
-  }, [plan, tasks]);
+
+    let nextFocus: Task | null = null;
+    if (plan && plan.rankedTaskIds.length > 0) {
+      for (const taskId of plan.rankedTaskIds) {
+        const ranked = tasks.find((task) => task.id === taskId) || null;
+        if (ranked && isEligible(ranked)) {
+          nextFocus = ranked;
+          break;
+        }
+      }
+    }
+
+    if (!nextFocus) {
+      nextFocus = tasks.find(isEligible) || null;
+    }
+
+    setFocusTask(nextFocus);
+  }, [plan, tasks, focusTask]);
 
   const fetchTasks = async () => {
     try {
@@ -1189,6 +1590,86 @@ export default function ProfFlowPage() {
       console.error('Failed to fetch plan:', err);
     }
   };
+
+  const handleSetTaskCompleted = useCallback(async (task: Task, completed: boolean) => {
+    setTasks((prev) =>
+      prev.map((existing) => {
+        if (existing.id !== task.id) return existing;
+        if (existing.recurrenceRule) {
+          return { ...existing, completedToday: completed };
+        }
+        return {
+          ...existing,
+          status: completed ? 'done' : 'active',
+          completedToday: completed,
+        };
+      })
+    );
+
+    try {
+      if (task.recurrenceRule) {
+        const res = await fetch(`/api/tasks/${task.id}/complete-today`, {
+          method: completed ? 'POST' : 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (!res.ok) throw new Error(`Completion update failed: ${res.status}`);
+      } else {
+        const res = await fetch(`/api/tasks/${task.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: completed ? 'done' : 'active' }),
+        });
+        if (!res.ok) throw new Error(`Task update failed: ${res.status}`);
+      }
+
+      await fetchTasks();
+    } catch (err) {
+      console.error('Failed to update task completion:', err);
+      await fetchTasks();
+    }
+  }, []);
+
+  const handleUpdateManifestOrder = useCallback(
+    async (orderByCategory: Record<TaskCategoryKey, string[]>) => {
+      setTasks((prev) => {
+        const categories: TaskCategoryKey[] = ['research', 'teaching_service', 'family', 'health'];
+        const taskById = new Map(prev.map((task) => [task.id, task]));
+        const seen = new Set<string>();
+        const next: Task[] = [];
+
+        for (const category of categories) {
+          for (const taskId of orderByCategory[category] ?? []) {
+            const task = taskById.get(taskId);
+            if (!task || seen.has(taskId)) continue;
+            seen.add(taskId);
+            next.push(task.category === category ? task : { ...task, category });
+          }
+        }
+
+        for (const task of prev) {
+          if (seen.has(task.id)) continue;
+          next.push(task);
+        }
+
+        return next;
+      });
+
+      try {
+        const res = await fetch('/api/tasks/manifest', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderByCategory }),
+        });
+        if (!res.ok) throw new Error(`Manifest update failed: ${res.status}`);
+        await fetchTasks();
+      } catch (err) {
+        console.error('Failed to update manifest order:', err);
+        await fetchTasks();
+      }
+    },
+    []
+  );
 
   const refreshScheduleView = () => {
     schedulePlanCacheRef.current = {};
@@ -1326,9 +1807,8 @@ export default function ProfFlowPage() {
 
   const handleCompleteTask = useCallback(async () => {
     if (!focusTask) return;
-    await handleSendMessage(`Complete the task "${focusTask.title}"`);
-    setChatVisible(true);
-  }, [focusTask, handleSendMessage]);
+    await handleSetTaskCompleted(focusTask, true);
+  }, [focusTask, handleSetTaskCompleted]);
 
   return (
     <div className="min-h-screen h-screen overflow-hidden bg-slate-950 text-slate-100">
@@ -1341,6 +1821,8 @@ export default function ProfFlowPage() {
         onToggle={() => setTaskDrawerOpen(!taskDrawerOpen)}
         tasks={tasks}
         onSelectTask={handleSelectTask}
+        onSetTaskCompleted={handleSetTaskCompleted}
+        onUpdateManifestOrder={handleUpdateManifestOrder}
       />
 
       {/* Schedule Drawer (Right - slides in) */}
