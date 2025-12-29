@@ -172,15 +172,15 @@ Design rules from this chat:
     server’s local date.
 - `POST /api/tasks`
   - Creates a task (requires valid origin).
-- `PATCH /api/tasks/[id]`  ✅ added
+- `PATCH /api/tasks/[id]` (added in this chat)
   - Updates `status` and/or `category` (requires valid origin).
   - If setting `status:'done'` for a non-recurring task, also records a completion for today.
   - If setting `status:'active'`, removes today’s completion record (undo for today).
-- `POST /api/tasks/[id]/complete-today`  ✅ added
+- `POST /api/tasks/[id]/complete-today` (added in this chat)
   - Records a completion for `date` (defaults to today) without changing task status.
-- `DELETE /api/tasks/[id]/complete-today`  ✅ added
+- `DELETE /api/tasks/[id]/complete-today` (added in this chat)
   - Removes completion record(s) for `date` (defaults to today).
-- `PATCH /api/tasks/manifest`  ✅ added
+- `PATCH /api/tasks/manifest` (added in this chat)
   - Persists drag/drop ordering and cross-category moves for **active tasks**.
   - Body: `{ orderByCategory: { research: string[], teaching_service: string[], family: string[], health: string[] } }`
 
@@ -349,4 +349,3 @@ This is expected until an ESLint config is committed.
 - Persist schedule view offset in localStorage.
 - Refactor `app/page.tsx` into smaller components under `components/` to reduce file size.
 - Add tests for new API routes (task patching, completion toggles, manifest updates).
-
