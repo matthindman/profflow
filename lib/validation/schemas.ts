@@ -146,6 +146,67 @@ export const LearningsFileSchemaV2 = z.object({
   learnings: z.array(LearningSchema),
 });
 
+// ============================================
+// Energy & Recovery Tracking Schemas
+// ============================================
+
+export const MoodTypeSchema = z.enum(['energized', 'calm', 'neutral', 'tired', 'stressed']);
+
+export const EnergyCheckInSchema = z.object({
+  id: UUIDSchema,
+  date: DateStringSchema,
+  energyLevel: z.number().int().min(1).max(10),
+  mood: MoodTypeSchema,
+  notes: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+export const WorkBlockSchema = z.object({
+  id: UUIDSchema,
+  date: DateStringSchema,
+  startTime: TimeStringSchema,
+  endTime: TimeStringSchema.nullable(),
+  plannedDurationMinutes: z.number().int().min(1).max(240),
+  actualDurationMinutes: z.number().int().min(0).nullable(),
+  taskId: UUIDSchema.nullable(),
+  focusRating: z.number().int().min(1).max(5).nullable(),
+  notes: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const BreakActivityTypeSchema = z.enum([
+  'walk',
+  'stretch',
+  'meditation',
+  'snack',
+  'social',
+  'phone',
+  'nap',
+  'fresh_air',
+  'other',
+]);
+
+export const BreakLogSchema = z.object({
+  id: UUIDSchema,
+  date: DateStringSchema,
+  startTime: TimeStringSchema,
+  endTime: TimeStringSchema.nullable(),
+  durationMinutes: z.number().int().min(0).nullable(),
+  activities: z.array(BreakActivityTypeSchema),
+  restorativeScore: z.number().int().min(1).max(5).nullable(),
+  notes: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const EnergyFileSchemaV2 = z.object({
+  version: z.literal(2),
+  checkIns: z.array(EnergyCheckInSchema),
+  workBlocks: z.array(WorkBlockSchema),
+  breakLogs: z.array(BreakLogSchema),
+});
+
 export const FILE_SCHEMAS: Record<
   string,
   { current: number; schemas: Record<number, z.ZodSchema> }
@@ -173,5 +234,9 @@ export const FILE_SCHEMAS: Record<
   'learnings.json': {
     current: 2,
     schemas: { 2: LearningsFileSchemaV2 },
+  },
+  'energy.json': {
+    current: 2,
+    schemas: { 2: EnergyFileSchemaV2 },
   },
 };

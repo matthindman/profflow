@@ -67,6 +67,58 @@ interface ProposedOperation {
   data: Record<string, unknown>;
 }
 
+// Energy tracking types
+type MoodType = 'energized' | 'calm' | 'neutral' | 'tired' | 'stressed';
+type BreakActivityType = 'walk' | 'stretch' | 'meditation' | 'snack' | 'social' | 'phone' | 'nap' | 'fresh_air' | 'other';
+
+interface EnergyCheckIn {
+  id: string;
+  date: string;
+  energyLevel: number;
+  mood: MoodType;
+  notes: string | null;
+  createdAt: string;
+}
+
+interface WorkBlock {
+  id: string;
+  date: string;
+  startTime: string;
+  endTime: string | null;
+  plannedDurationMinutes: number;
+  actualDurationMinutes: number | null;
+  taskId: string | null;
+  focusRating: number | null;
+  notes: string | null;
+}
+
+interface BreakLog {
+  id: string;
+  date: string;
+  startTime: string;
+  endTime: string | null;
+  durationMinutes: number | null;
+  activities: BreakActivityType[];
+  restorativeScore: number | null;
+}
+
+interface EnergySuggestion {
+  id: string;
+  type: 'break_reminder' | 'energy_tip' | 'pattern_insight' | 'schedule_adjustment';
+  priority: 'low' | 'medium' | 'high';
+  title: string;
+  description: string;
+  actionable: boolean;
+}
+
+interface EnergyState {
+  checkIn: EnergyCheckIn | null;
+  activeWorkBlock: WorkBlock | null;
+  activeBreak: BreakLog | null;
+  todayWorkBlocks: WorkBlock[];
+  todayBreaks: BreakLog[];
+}
+
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -98,6 +150,28 @@ const BLOCK_TYPE_STYLES = {
 
 const SCHEDULE_OFFSET_MIN = -1;
 const SCHEDULE_OFFSET_MAX = 2;
+
+const MOOD_CONFIG: Record<MoodType, { label: string; icon: string; color: string }> = {
+  energized: { label: 'Energized', icon: '⚡', color: 'text-yellow-400' },
+  calm: { label: 'Calm', icon: '◎', color: 'text-emerald-400' },
+  neutral: { label: 'Neutral', icon: '◉', color: 'text-slate-400' },
+  tired: { label: 'Tired', icon: '◐', color: 'text-blue-400' },
+  stressed: { label: 'Stressed', icon: '◈', color: 'text-rose-400' },
+};
+
+const BREAK_ACTIVITY_CONFIG: Record<BreakActivityType, { label: string; icon: string }> = {
+  walk: { label: 'Walk', icon: '🚶' },
+  stretch: { label: 'Stretch', icon: '🧘' },
+  meditation: { label: 'Meditate', icon: '🧘' },
+  snack: { label: 'Snack', icon: '🍎' },
+  social: { label: 'Social', icon: '💬' },
+  phone: { label: 'Phone', icon: '📱' },
+  nap: { label: 'Nap', icon: '😴' },
+  fresh_air: { label: 'Fresh Air', icon: '🌿' },
+  other: { label: 'Other', icon: '✨' },
+};
+
+const DEFAULT_WORK_BLOCK_DURATION = 90; // Ultradian rhythm: 90-120 minutes
 
 function getLocalDateKey(date: Date): string {
   const year = date.getFullYear();
@@ -1442,6 +1516,659 @@ function ChatToggle({
 }
 
 // ============================================
+// ENERGY CHECK-IN MODAL
+// ============================================
+
+function EnergyCheckInModal({
+  isVisible,
+  onClose,
+  onSubmit,
+  existingCheckIn,
+}: {
+  isVisible: boolean;
+  onClose: () => void;
+  onSubmit: (energyLevel: number, mood: MoodType, notes: string | null) => void;
+  existingCheckIn: EnergyCheckIn | null;
+}) {
+  const [energyLevel, setEnergyLevel] = useState(existingCheckIn?.energyLevel ?? 5);
+  const [mood, setMood] = useState<MoodType>(existingCheckIn?.mood ?? 'neutral');
+  const [notes, setNotes] = useState(existingCheckIn?.notes ?? '');
+
+  useEffect(() => {
+    if (existingCheckIn) {
+      setEnergyLevel(existingCheckIn.energyLevel);
+      setMood(existingCheckIn.mood);
+      setNotes(existingCheckIn.notes ?? '');
+    }
+  }, [existingCheckIn]);
+
+  if (!isVisible) return null;
+
+  const handleSubmit = () => {
+    onSubmit(energyLevel, mood, notes.trim() || null);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-8">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <GlassPanel className="relative w-full max-w-md p-6" glow>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <span className="text-emerald-400 text-sm font-mono">◆</span>
+            <h2 className="text-slate-200 font-semibold tracking-wide">ENERGY CHECK-IN</h2>
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition-colors p-1">
+            ✕
+          </button>
+        </div>
+
+        {/* Energy Level Slider */}
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-slate-400 text-sm">Energy Level</span>
+            <span className="text-cyan-400 text-lg font-mono font-bold">{energyLevel}</span>
+          </div>
+          <input
+            type="range"
+            min="1"
+            max="10"
+            value={energyLevel}
+            onChange={(e) => setEnergyLevel(Number(e.target.value))}
+            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+          />
+          <div className="flex justify-between text-xs text-slate-600 mt-1">
+            <span>Low</span>
+            <span>High</span>
+          </div>
+        </div>
+
+        {/* Mood Selection */}
+        <div className="mb-6">
+          <span className="text-slate-400 text-sm block mb-3">How are you feeling?</span>
+          <div className="grid grid-cols-5 gap-2">
+            {(Object.keys(MOOD_CONFIG) as MoodType[]).map((m) => {
+              const config = MOOD_CONFIG[m];
+              return (
+                <button
+                  key={m}
+                  onClick={() => setMood(m)}
+                  className={`
+                    p-2 rounded-lg border transition-all duration-200
+                    flex flex-col items-center gap-1
+                    ${mood === m
+                      ? 'bg-slate-700/50 border-cyan-500/50'
+                      : 'bg-slate-800/30 border-slate-700/30 hover:border-slate-600/50'}
+                  `}
+                >
+                  <span className={`text-lg ${config.color}`}>{config.icon}</span>
+                  <span className="text-[10px] text-slate-400">{config.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Notes */}
+        <div className="mb-6">
+          <span className="text-slate-400 text-sm block mb-2">Notes (optional)</span>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="How did you sleep? Any observations..."
+            rows={2}
+            className="
+              w-full p-3 rounded-lg
+              bg-slate-800/50 border border-slate-700/50
+              text-slate-200 placeholder-slate-600
+              focus:outline-none focus:border-cyan-500/50
+              resize-none text-sm
+            "
+          />
+        </div>
+
+        <button
+          onClick={handleSubmit}
+          className="
+            w-full py-3 rounded-lg
+            bg-emerald-600 hover:bg-emerald-500
+            text-white font-medium
+            transition-colors
+          "
+        >
+          {existingCheckIn ? 'Update Check-in' : 'Log Check-in'}
+        </button>
+      </GlassPanel>
+    </div>
+  );
+}
+
+// ============================================
+// WORK BLOCK TIMER
+// ============================================
+
+function WorkBlockTimer({
+  activeWorkBlock,
+  currentTime,
+  onEndBlock,
+  onStartBlock,
+  linkedTask,
+}: {
+  activeWorkBlock: WorkBlock | null;
+  currentTime: Date;
+  onEndBlock: (focusRating: number | null) => void;
+  onStartBlock: (durationMinutes: number) => void;
+  linkedTask: Task | null;
+}) {
+  const [showRating, setShowRating] = useState(false);
+  const [focusRating, setFocusRating] = useState<number>(3);
+
+  if (!activeWorkBlock) {
+    return (
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => onStartBlock(DEFAULT_WORK_BLOCK_DURATION)}
+          className="
+            px-4 py-2 rounded-lg
+            bg-cyan-600/20 border border-cyan-500/30
+            text-cyan-400 text-sm font-medium
+            hover:bg-cyan-600/30 hover:border-cyan-500/50
+            transition-all flex items-center gap-2
+          "
+        >
+          <span>▶</span>
+          <span>Start Focus Block</span>
+        </button>
+      </div>
+    );
+  }
+
+  const [startH, startM] = activeWorkBlock.startTime.split(':').map(Number);
+  const elapsedMinutes = Math.floor(
+    (currentTime.getHours() * 60 + currentTime.getMinutes()) - (startH * 60 + startM)
+  );
+  const plannedMinutes = activeWorkBlock.plannedDurationMinutes;
+  const remainingMinutes = plannedMinutes - elapsedMinutes;
+  const progress = Math.min(100, (elapsedMinutes / plannedMinutes) * 100);
+  const isOvertime = elapsedMinutes > plannedMinutes;
+
+  const formatTime = (minutes: number) => {
+    const h = Math.floor(Math.abs(minutes) / 60);
+    const m = Math.abs(minutes) % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+
+  if (showRating) {
+    return (
+      <GlassPanel className="p-4" glow>
+        <div className="text-center mb-4">
+          <span className="text-slate-400 text-sm">Rate your focus</span>
+        </div>
+        <div className="flex justify-center gap-2 mb-4">
+          {[1, 2, 3, 4, 5].map((rating) => (
+            <button
+              key={rating}
+              onClick={() => setFocusRating(rating)}
+              className={`
+                w-10 h-10 rounded-lg border transition-all
+                ${focusRating === rating
+                  ? 'bg-cyan-600/30 border-cyan-500/50 text-cyan-400'
+                  : 'bg-slate-800/30 border-slate-700/30 text-slate-400 hover:border-slate-600/50'}
+              `}
+            >
+              {rating}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => {
+              onEndBlock(focusRating);
+              setShowRating(false);
+            }}
+            className="
+              flex-1 py-2 rounded-lg
+              bg-emerald-600 hover:bg-emerald-500
+              text-white text-sm font-medium
+              transition-colors
+            "
+          >
+            End Block
+          </button>
+          <button
+            onClick={() => setShowRating(false)}
+            className="
+              px-4 py-2 rounded-lg
+              bg-slate-700 hover:bg-slate-600
+              text-slate-300 text-sm
+              transition-colors
+            "
+          >
+            Cancel
+          </button>
+        </div>
+      </GlassPanel>
+    );
+  }
+
+  return (
+    <GlassPanel className="p-4" glow>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className={`w-2 h-2 rounded-full animate-pulse ${isOvertime ? 'bg-amber-400' : 'bg-cyan-400'}`} />
+          <span className="text-xs text-slate-400 font-mono uppercase tracking-wider">
+            Focus Block Active
+          </span>
+        </div>
+        <span className="text-xs text-slate-500 font-mono">
+          Started {activeWorkBlock.startTime}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="h-2 bg-slate-800 rounded-full overflow-hidden mb-3">
+        <div
+          className={`h-full transition-all duration-1000 ${isOvertime ? 'bg-amber-500' : 'bg-cyan-500'}`}
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+
+      <div className="flex items-center justify-between mb-3">
+        <span className={`text-2xl font-mono font-bold ${isOvertime ? 'text-amber-400' : 'text-cyan-400'}`}>
+          {formatTime(elapsedMinutes)}
+        </span>
+        <span className="text-slate-500 text-sm">
+          {isOvertime ? `+${formatTime(Math.abs(remainingMinutes))} over` : `${formatTime(remainingMinutes)} left`}
+        </span>
+      </div>
+
+      {linkedTask && (
+        <p className="text-slate-400 text-sm mb-3 truncate">
+          → {linkedTask.title}
+        </p>
+      )}
+
+      <div className="flex gap-2">
+        <button
+          onClick={() => setShowRating(true)}
+          className="
+            flex-1 py-2 rounded-lg
+            bg-slate-700/50 border border-slate-600/30
+            text-slate-300 text-sm
+            hover:bg-slate-700 hover:border-slate-500/50
+            transition-all
+          "
+        >
+          End Block
+        </button>
+      </div>
+
+      {isOvertime && (
+        <p className="text-amber-400 text-xs mt-3 text-center">
+          Consider taking a break for optimal recovery
+        </p>
+      )}
+    </GlassPanel>
+  );
+}
+
+// ============================================
+// BREAK QUALITY MODAL
+// ============================================
+
+function BreakQualityModal({
+  isVisible,
+  onClose,
+  onSubmit,
+  activeBreak,
+}: {
+  isVisible: boolean;
+  onClose: () => void;
+  onSubmit: (activities: BreakActivityType[], restorativeScore: number | null) => void;
+  activeBreak: BreakLog | null;
+}) {
+  const [selectedActivities, setSelectedActivities] = useState<Set<BreakActivityType>>(
+    new Set(activeBreak?.activities ?? [])
+  );
+  const [restorativeScore, setRestorativeScore] = useState<number | null>(null);
+
+  if (!isVisible) return null;
+
+  const toggleActivity = (activity: BreakActivityType) => {
+    const newSet = new Set(selectedActivities);
+    if (newSet.has(activity)) {
+      newSet.delete(activity);
+    } else {
+      newSet.add(activity);
+    }
+    setSelectedActivities(newSet);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-8">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <GlassPanel className="relative w-full max-w-md p-6" glow>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <span className="text-emerald-400 text-sm font-mono">◇</span>
+            <h2 className="text-slate-200 font-semibold tracking-wide">BREAK QUALITY</h2>
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition-colors p-1">
+            ✕
+          </button>
+        </div>
+
+        {/* Activities */}
+        <div className="mb-6">
+          <span className="text-slate-400 text-sm block mb-3">What did you do?</span>
+          <div className="grid grid-cols-3 gap-2">
+            {(Object.keys(BREAK_ACTIVITY_CONFIG) as BreakActivityType[]).map((activity) => {
+              const config = BREAK_ACTIVITY_CONFIG[activity];
+              const isSelected = selectedActivities.has(activity);
+              return (
+                <button
+                  key={activity}
+                  onClick={() => toggleActivity(activity)}
+                  className={`
+                    p-2 rounded-lg border transition-all duration-200
+                    flex flex-col items-center gap-1
+                    ${isSelected
+                      ? 'bg-emerald-600/20 border-emerald-500/50'
+                      : 'bg-slate-800/30 border-slate-700/30 hover:border-slate-600/50'}
+                  `}
+                >
+                  <span className="text-lg">{config.icon}</span>
+                  <span className="text-[10px] text-slate-400">{config.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Restorative Score */}
+        <div className="mb-6">
+          <span className="text-slate-400 text-sm block mb-3">How refreshed do you feel?</span>
+          <div className="flex justify-center gap-2">
+            {[1, 2, 3, 4, 5].map((score) => (
+              <button
+                key={score}
+                onClick={() => setRestorativeScore(score)}
+                className={`
+                  w-12 h-12 rounded-lg border transition-all
+                  flex items-center justify-center
+                  ${restorativeScore === score
+                    ? 'bg-emerald-600/30 border-emerald-500/50 text-emerald-400'
+                    : 'bg-slate-800/30 border-slate-700/30 text-slate-400 hover:border-slate-600/50'}
+                `}
+              >
+                <span className="font-mono font-bold">{score}</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex justify-between text-xs text-slate-600 mt-2 px-2">
+            <span>Drained</span>
+            <span>Refreshed</span>
+          </div>
+        </div>
+
+        <button
+          onClick={() => {
+            onSubmit(Array.from(selectedActivities), restorativeScore);
+            onClose();
+          }}
+          className="
+            w-full py-3 rounded-lg
+            bg-emerald-600 hover:bg-emerald-500
+            text-white font-medium
+            transition-colors
+          "
+        >
+          End Break
+        </button>
+      </GlassPanel>
+    </div>
+  );
+}
+
+// ============================================
+// ENERGY DASHBOARD DRAWER
+// ============================================
+
+function EnergyDashboardDrawer({
+  isOpen,
+  onToggle,
+  energyState,
+  suggestions,
+  currentTime,
+  onOpenCheckIn,
+  onStartWorkBlock,
+  onEndWorkBlock,
+  onStartBreak,
+  onEndBreak,
+  focusTask,
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+  energyState: EnergyState | null;
+  suggestions: EnergySuggestion[];
+  currentTime: Date;
+  onOpenCheckIn: () => void;
+  onStartWorkBlock: (duration: number) => void;
+  onEndWorkBlock: (focusRating: number | null) => void;
+  onStartBreak: () => void;
+  onEndBreak: () => void;
+  focusTask: Task | null;
+}) {
+  const hasCheckIn = !!energyState?.checkIn;
+  const todayFocusMinutes = energyState?.todayWorkBlocks
+    .filter(b => b.endTime !== null)
+    .reduce((sum, b) => sum + (b.actualDurationMinutes ?? 0), 0) ?? 0;
+  const todayBreakCount = energyState?.todayBreaks.length ?? 0;
+
+  return (
+    <>
+      {/* Toggle Button - top center */}
+      <button
+        onClick={onToggle}
+        className={`
+          fixed top-4 left-1/2 -translate-x-1/2 z-50
+          px-4 py-2
+          bg-slate-900/80 backdrop-blur-md
+          border border-slate-700/50
+          rounded-b-lg
+          flex items-center justify-center gap-2
+          transition-all duration-300
+          hover:bg-slate-800/80 hover:border-emerald-500/30
+          group
+          ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
+        `}
+        style={{ WebkitBackdropFilter: 'blur(12px)' }}
+        aria-label="Open energy tracker"
+      >
+        {!hasCheckIn && (
+          <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+        )}
+        <span className="text-slate-400 group-hover:text-emerald-400 transition-colors text-xs font-mono uppercase tracking-wider">
+          Energy
+        </span>
+        {hasCheckIn && energyState?.checkIn && (
+          <span className={`${MOOD_CONFIG[energyState.checkIn.mood].color} text-sm`}>
+            {energyState.checkIn.energyLevel}
+          </span>
+        )}
+      </button>
+
+      {/* Drawer Panel */}
+      <div
+        className={`
+          fixed top-0 left-1/2 -translate-x-1/2 z-40
+          w-full max-w-lg
+          transition-transform duration-500 ease-out
+          ${isOpen ? 'translate-y-0' : '-translate-y-full'}
+        `}
+      >
+        <GlassPanel className="rounded-t-none p-4" glow>
+          {/* Header */}
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <span className="text-emerald-400 text-sm font-mono">◆</span>
+              <h2 className="text-slate-200 font-semibold tracking-wide">ENERGY TRACKER</h2>
+            </div>
+            <button
+              onClick={onToggle}
+              className="text-slate-500 hover:text-slate-300 transition-colors p-1"
+              aria-label="Close energy tracker"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Quick Stats */}
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="bg-slate-800/30 rounded-lg p-3 text-center">
+              <p className="text-slate-500 text-[10px] font-mono uppercase tracking-wider mb-1">Energy</p>
+              {hasCheckIn ? (
+                <p className={`text-xl font-mono font-bold ${MOOD_CONFIG[energyState!.checkIn!.mood].color}`}>
+                  {energyState!.checkIn!.energyLevel}
+                </p>
+              ) : (
+                <button
+                  onClick={onOpenCheckIn}
+                  className="text-emerald-400 text-xs hover:text-emerald-300 transition-colors"
+                >
+                  Check in
+                </button>
+              )}
+            </div>
+            <div className="bg-slate-800/30 rounded-lg p-3 text-center">
+              <p className="text-slate-500 text-[10px] font-mono uppercase tracking-wider mb-1">Focus</p>
+              <p className="text-xl font-mono font-bold text-cyan-400">
+                {Math.round(todayFocusMinutes / 60 * 10) / 10}h
+              </p>
+            </div>
+            <div className="bg-slate-800/30 rounded-lg p-3 text-center">
+              <p className="text-slate-500 text-[10px] font-mono uppercase tracking-wider mb-1">Breaks</p>
+              <p className="text-xl font-mono font-bold text-amber-400">{todayBreakCount}</p>
+            </div>
+          </div>
+
+          {/* Work Block Timer */}
+          {energyState && (
+            <div className="mb-4">
+              <WorkBlockTimer
+                activeWorkBlock={energyState.activeWorkBlock}
+                currentTime={currentTime}
+                onEndBlock={onEndWorkBlock}
+                onStartBlock={onStartWorkBlock}
+                linkedTask={focusTask}
+              />
+            </div>
+          )}
+
+          {/* Active Break */}
+          {energyState?.activeBreak && (
+            <div className="mb-4 p-3 rounded-lg bg-emerald-600/10 border border-emerald-500/30">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                  <span className="text-emerald-400 text-sm">Break in progress</span>
+                </div>
+                <button
+                  onClick={onEndBreak}
+                  className="text-emerald-400 text-sm hover:text-emerald-300 transition-colors"
+                >
+                  End Break
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Quick Actions */}
+          {!energyState?.activeWorkBlock && !energyState?.activeBreak && (
+            <div className="flex gap-2 mb-4">
+              <button
+                onClick={() => onStartWorkBlock(DEFAULT_WORK_BLOCK_DURATION)}
+                className="
+                  flex-1 py-2 rounded-lg
+                  bg-cyan-600/20 border border-cyan-500/30
+                  text-cyan-400 text-sm
+                  hover:bg-cyan-600/30 hover:border-cyan-500/50
+                  transition-all
+                "
+              >
+                Start Focus
+              </button>
+              <button
+                onClick={onStartBreak}
+                className="
+                  flex-1 py-2 rounded-lg
+                  bg-emerald-600/20 border border-emerald-500/30
+                  text-emerald-400 text-sm
+                  hover:bg-emerald-600/30 hover:border-emerald-500/50
+                  transition-all
+                "
+              >
+                Take Break
+              </button>
+              {!hasCheckIn && (
+                <button
+                  onClick={onOpenCheckIn}
+                  className="
+                    flex-1 py-2 rounded-lg
+                    bg-amber-600/20 border border-amber-500/30
+                    text-amber-400 text-sm
+                    hover:bg-amber-600/30 hover:border-amber-500/50
+                    transition-all
+                  "
+                >
+                  Check In
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* AI Suggestions */}
+          {suggestions.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-slate-500 text-[10px] font-mono uppercase tracking-wider">Suggestions</p>
+              {suggestions.slice(0, 2).map((suggestion) => (
+                <div
+                  key={suggestion.id}
+                  className={`
+                    p-3 rounded-lg border
+                    ${suggestion.priority === 'high'
+                      ? 'bg-amber-500/10 border-amber-500/30'
+                      : suggestion.priority === 'medium'
+                        ? 'bg-cyan-500/10 border-cyan-500/30'
+                        : 'bg-slate-800/30 border-slate-700/30'}
+                  `}
+                >
+                  <p className={`text-sm font-medium ${
+                    suggestion.priority === 'high' ? 'text-amber-400' :
+                    suggestion.priority === 'medium' ? 'text-cyan-400' : 'text-slate-300'
+                  }`}>
+                    {suggestion.title}
+                  </p>
+                  <p className="text-slate-400 text-xs mt-1">{suggestion.description}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </GlassPanel>
+      </div>
+
+      {/* Backdrop overlay when drawer is open */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 bg-black/[0.06] z-30"
+          onClick={onToggle}
+        />
+      )}
+    </>
+  );
+}
+
+// ============================================
 // MAIN PAGE COMPONENT
 // ============================================
 
@@ -1468,6 +2195,13 @@ export default function ProfFlowPage() {
   const [pendingOperations, setPendingOperations] = useState<ProposedOperation[] | null>(null);
   const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
 
+  // Energy tracking state
+  const [energyState, setEnergyState] = useState<EnergyState | null>(null);
+  const [energySuggestions, setEnergySuggestions] = useState<EnergySuggestion[]>([]);
+  const [energyDrawerOpen, setEnergyDrawerOpen] = useState(false);
+  const [checkInModalOpen, setCheckInModalOpen] = useState(false);
+  const [breakQualityModalOpen, setBreakQualityModalOpen] = useState(false);
+
   const todayDate = getDateAtLocalMidnight(currentTime);
   const scheduleViewDate = addDaysLocal(todayDate, scheduleOffset);
   const scheduleViewDateKey = getLocalDateKey(scheduleViewDate);
@@ -1484,6 +2218,17 @@ export default function ProfFlowPage() {
   useEffect(() => {
     fetchTasks();
     fetchPlan();
+    fetchEnergyState();
+    fetchEnergySuggestions();
+  }, []);
+
+  // Refresh energy data every minute
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchEnergyState();
+      fetchEnergySuggestions();
+    }, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   // Load plan for the schedule viewer day (separate from today's plan used for focus).
@@ -1588,6 +2333,28 @@ export default function ProfFlowPage() {
       setPlan(data.plan || null);
     } catch (err) {
       console.error('Failed to fetch plan:', err);
+    }
+  };
+
+  const fetchEnergyState = async () => {
+    try {
+      const res = await fetch('/api/energy/state');
+      if (!res.ok) throw new Error('Failed to fetch energy state');
+      const data = await res.json();
+      setEnergyState(data);
+    } catch (err) {
+      console.error('Failed to fetch energy state:', err);
+    }
+  };
+
+  const fetchEnergySuggestions = async () => {
+    try {
+      const res = await fetch('/api/energy/suggestions');
+      if (!res.ok) throw new Error('Failed to fetch suggestions');
+      const data = await res.json();
+      setEnergySuggestions(data.suggestions || []);
+    } catch (err) {
+      console.error('Failed to fetch energy suggestions:', err);
     }
   };
 
@@ -1810,10 +2577,102 @@ export default function ProfFlowPage() {
     await handleSetTaskCompleted(focusTask, true);
   }, [focusTask, handleSetTaskCompleted]);
 
+  // Energy tracking handlers
+  const handleEnergyCheckIn = useCallback(async (energyLevel: number, mood: MoodType, notes: string | null) => {
+    try {
+      const res = await fetch('/api/energy/checkin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ energyLevel, mood, notes }),
+      });
+      if (!res.ok) throw new Error('Failed to save check-in');
+      await fetchEnergyState();
+      await fetchEnergySuggestions();
+    } catch (err) {
+      console.error('Failed to save energy check-in:', err);
+    }
+  }, []);
+
+  const handleStartWorkBlock = useCallback(async (durationMinutes: number) => {
+    try {
+      const res = await fetch('/api/energy/workblock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plannedDurationMinutes: durationMinutes,
+          taskId: focusTask?.id ?? null,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to start work block');
+      await fetchEnergyState();
+      await fetchEnergySuggestions();
+    } catch (err) {
+      console.error('Failed to start work block:', err);
+    }
+  }, [focusTask]);
+
+  const handleEndWorkBlock = useCallback(async (focusRating: number | null) => {
+    if (!energyState?.activeWorkBlock) return;
+    try {
+      const res = await fetch('/api/energy/workblock', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: energyState.activeWorkBlock.id,
+          focusRating,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to end work block');
+      await fetchEnergyState();
+      await fetchEnergySuggestions();
+    } catch (err) {
+      console.error('Failed to end work block:', err);
+    }
+  }, [energyState?.activeWorkBlock]);
+
+  const handleStartBreak = useCallback(async () => {
+    try {
+      const res = await fetch('/api/energy/break', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) throw new Error('Failed to start break');
+      await fetchEnergyState();
+      await fetchEnergySuggestions();
+    } catch (err) {
+      console.error('Failed to start break:', err);
+    }
+  }, []);
+
+  const handleEndBreak = useCallback(async (activities?: BreakActivityType[], restorativeScore?: number | null) => {
+    if (!energyState?.activeBreak) return;
+    try {
+      const res = await fetch('/api/energy/break', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: energyState.activeBreak.id,
+          activities,
+          restorativeScore,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to end break');
+      await fetchEnergyState();
+      await fetchEnergySuggestions();
+    } catch (err) {
+      console.error('Failed to end break:', err);
+    }
+  }, [energyState?.activeBreak]);
+
+  const handleOpenBreakQualityModal = useCallback(() => {
+    setBreakQualityModalOpen(true);
+  }, []);
+
   return (
     <div className="min-h-screen h-screen overflow-hidden bg-slate-950 text-slate-100">
       {/* Background */}
-      <AmbientBackground dim={taskDrawerOpen || scheduleDrawerOpen || focusDrawerOpen} />
+      <AmbientBackground dim={taskDrawerOpen || scheduleDrawerOpen || focusDrawerOpen || energyDrawerOpen} />
 
       {/* Task Drawer (Left - slides in) */}
       <TaskDrawer
@@ -1874,16 +2733,50 @@ export default function ProfFlowPage() {
 
       {/* Chat Toggle Button (Floating) */}
       {!chatVisible && (
-        <ChatToggle 
-          onClick={() => setChatVisible(true)} 
+        <ChatToggle
+          onClick={() => setChatVisible(true)}
           hasUnread={pendingOperations !== null}
           rightOffsetClass={scheduleDrawerOpen ? 'right-80' : 'right-8'}
         />
       )}
 
+      {/* Energy Dashboard Drawer (Top - slides down) */}
+      <EnergyDashboardDrawer
+        isOpen={energyDrawerOpen}
+        onToggle={() => setEnergyDrawerOpen(!energyDrawerOpen)}
+        energyState={energyState}
+        suggestions={energySuggestions}
+        currentTime={currentTime}
+        onOpenCheckIn={() => setCheckInModalOpen(true)}
+        onStartWorkBlock={handleStartWorkBlock}
+        onEndWorkBlock={handleEndWorkBlock}
+        onStartBreak={handleStartBreak}
+        onEndBreak={handleOpenBreakQualityModal}
+        focusTask={focusTask}
+      />
+
+      {/* Energy Check-in Modal */}
+      <EnergyCheckInModal
+        isVisible={checkInModalOpen}
+        onClose={() => setCheckInModalOpen(false)}
+        onSubmit={handleEnergyCheckIn}
+        existingCheckIn={energyState?.checkIn ?? null}
+      />
+
+      {/* Break Quality Modal */}
+      <BreakQualityModal
+        isVisible={breakQualityModalOpen}
+        onClose={() => setBreakQualityModalOpen(false)}
+        onSubmit={(activities, score) => {
+          handleEndBreak(activities, score);
+          setBreakQualityModalOpen(false);
+        }}
+        activeBreak={energyState?.activeBreak ?? null}
+      />
+
       {/* Version indicator */}
       <div className="fixed bottom-4 left-4 z-10">
-        <p className="text-slate-600 text-xs font-mono">PROFFLOW v1.8 // AMBIENT</p>
+        <p className="text-slate-600 text-xs font-mono">PROFFLOW v1.9 // ENERGY</p>
       </div>
     </div>
   );

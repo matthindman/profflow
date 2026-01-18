@@ -129,3 +129,96 @@ export interface LearningsFile {
 export interface TaskWithCompletion extends Task {
   completedToday: boolean;
 }
+
+// ============================================
+// Energy & Recovery Tracking
+// ============================================
+
+export type MoodType = 'energized' | 'calm' | 'neutral' | 'tired' | 'stressed';
+
+export interface EnergyCheckIn {
+  id: string;
+  date: string; // YYYY-MM-DD
+  energyLevel: number; // 1-10
+  mood: MoodType;
+  notes: string | null;
+  createdAt: string;
+}
+
+export interface WorkBlock {
+  id: string;
+  date: string; // YYYY-MM-DD
+  startTime: string; // HH:MM
+  endTime: string | null; // HH:MM - null if still in progress
+  plannedDurationMinutes: number; // Target: 90-120 min
+  actualDurationMinutes: number | null;
+  taskId: string | null;
+  focusRating: number | null; // 1-5 self-rated focus quality
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type BreakActivityType =
+  | 'walk'
+  | 'stretch'
+  | 'meditation'
+  | 'snack'
+  | 'social'
+  | 'phone'
+  | 'nap'
+  | 'fresh_air'
+  | 'other';
+
+export interface BreakLog {
+  id: string;
+  date: string; // YYYY-MM-DD
+  startTime: string; // HH:MM
+  endTime: string | null; // HH:MM
+  durationMinutes: number | null;
+  activities: BreakActivityType[];
+  restorativeScore: number | null; // 1-5 how refreshed you feel
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EnergyFile {
+  version: 2;
+  checkIns: EnergyCheckIn[];
+  workBlocks: WorkBlock[];
+  breakLogs: BreakLog[];
+}
+
+// Analytics types
+export interface DailyEnergyPattern {
+  date: string;
+  morningEnergy: number | null;
+  mood: MoodType | null;
+  workBlockCount: number;
+  totalFocusMinutes: number;
+  averageFocusRating: number | null;
+  breakCount: number;
+  averageRestorativeScore: number | null;
+}
+
+export interface WeeklyEnergyPattern {
+  weekStart: string; // Monday YYYY-MM-DD
+  dailyPatterns: DailyEnergyPattern[];
+  averageEnergy: number | null;
+  mostCommonMood: MoodType | null;
+  totalWorkBlocks: number;
+  totalFocusMinutes: number;
+  optimalWorkTime: string | null; // HH:MM when energy/focus peaks
+  bestRestorativeActivities: BreakActivityType[];
+}
+
+export interface EnergySuggestion {
+  id: string;
+  type: 'break_reminder' | 'energy_tip' | 'pattern_insight' | 'schedule_adjustment';
+  priority: 'low' | 'medium' | 'high';
+  title: string;
+  description: string;
+  actionable: boolean;
+  createdAt: string;
+}

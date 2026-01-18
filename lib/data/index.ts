@@ -3,7 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { AsyncLocalStorage } from 'async_hooks';
 import lockfile from 'proper-lockfile';
-import { Task, TasksFile, Plan, PlansFile, Message, MessagesFile, TaskCompletion, CompletionsFile, SettingsFile, LearningsFile, TaskCategory, ProposedOperation, OperationResult, TaskWithCompletion } from '@/types/data';
+import { Task, TasksFile, Plan, PlansFile, Message, MessagesFile, TaskCompletion, CompletionsFile, SettingsFile, LearningsFile, TaskCategory, ProposedOperation, OperationResult, TaskWithCompletion, EnergyFile, EnergyCheckIn, WorkBlock, BreakLog, MoodType, BreakActivityType, DailyEnergyPattern, WeeklyEnergyPattern } from '@/types/data';
 import { FILE_SCHEMAS } from '@/lib/validation/schemas';
 import { getDataDir } from '@/lib/utils/paths';
 import { getLocalDateString } from '@/lib/utils/date';
@@ -734,5 +734,406 @@ export async function getTasksWithCompletions(localDate: string): Promise<TaskWi
       ...task,
       completedToday: todayCompletions.has(task.id),
     }));
+  });
+}
+
+// ============================================
+// Energy & Recovery Tracking
+// ============================================
+
+const energyDefault = (): EnergyFile => ({
+  version: 2,
+  checkIns: [],
+  workBlocks: [],
+  breakLogs: [],
+});
+
+// Energy Check-ins
+
+export async function getEnergyCheckIn(date: string): Promise<EnergyCheckIn | null> {
+  const file = await readData<EnergyFile>('energy.json', energyDefault);
+  return file.checkIns.find((c) => c.date === date) || null;
+}
+
+export async function getEnergyCheckIns(startDate: string, endDate: string): Promise<EnergyCheckIn[]> {
+  const file = await readData<EnergyFile>('energy.json', energyDefault);
+  return file.checkIns.filter((c) => c.date >= startDate && c.date <= endDate);
+}
+
+export async function createEnergyCheckIn(
+  data: Omit<EnergyCheckIn, 'id' | 'createdAt'>
+): Promise<EnergyCheckIn> {
+  return updateData<EnergyCheckIn>('energy.json', energyDefault, (file: EnergyFile) => {
+    // Remove existing check-in for this date if any
+    file.checkIns = file.checkIns.filter((c) => c.date !== data.date);
+
+    const checkIn: EnergyCheckIn = {
+      ...data,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+    };
+    file.checkIns.push(checkIn);
+    return checkIn;
+  });
+}
+
+// Work Blocks
+
+export async function getWorkBlocksForDate(date: string): Promise<WorkBlock[]> {
+  const file = await readData<EnergyFile>('energy.json', energyDefault);
+  return file.workBlocks.filter((b) => b.date === date);
+}
+
+export async function getActiveWorkBlock(): Promise<WorkBlock | null> {
+  const file = await readData<EnergyFile>('energy.json', energyDefault);
+  return file.workBlocks.find((b) => b.endTime === null) || null;
+}
+
+export async function startWorkBlock(
+  data: {
+    date: string;
+    startTime: string;
+    plannedDurationMinutes: number;
+    taskId?: string | null;
+    notes?: string | null;
+  }
+): Promise<WorkBlock> {
+  return updateData<WorkBlock>('energy.json', energyDefault, (file: EnergyFile) => {
+    // End any active work block first
+    const activeBlock = file.workBlocks.find((b) => b.endTime === null);
+    if (activeBlock) {
+      const now = new Date();
+      activeBlock.endTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const [startH, startM] = activeBlock.startTime.split(':').map(Number);
+      const [endH, endM] = activeBlock.endTime.split(':').map(Number);
+      activeBlock.actualDurationMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+      activeBlock.updatedAt = now.toISOString();
+    }
+
+    const now = new Date().toISOString();
+    const workBlock: WorkBlock = {
+      id: crypto.randomUUID(),
+      date: data.date,
+      startTime: data.startTime,
+      endTime: null,
+      plannedDurationMinutes: data.plannedDurationMinutes,
+      actualDurationMinutes: null,
+      taskId: data.taskId ?? null,
+      focusRating: null,
+      notes: data.notes ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    file.workBlocks.push(workBlock);
+    return workBlock;
+  });
+}
+
+export async function endWorkBlock(
+  id: string,
+  data: {
+    endTime: string;
+    focusRating?: number | null;
+    notes?: string | null;
+  }
+): Promise<WorkBlock | null> {
+  return updateData<WorkBlock | null>('energy.json', energyDefault, (file: EnergyFile) => {
+    const block = file.workBlocks.find((b) => b.id === id);
+    if (!block) return null;
+
+    block.endTime = data.endTime;
+    const [startH, startM] = block.startTime.split(':').map(Number);
+    const [endH, endM] = data.endTime.split(':').map(Number);
+    block.actualDurationMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+    if (data.focusRating !== undefined) block.focusRating = data.focusRating;
+    if (data.notes !== undefined) block.notes = data.notes;
+    block.updatedAt = new Date().toISOString();
+
+    return block;
+  });
+}
+
+export async function updateWorkBlock(
+  id: string,
+  updates: Partial<Pick<WorkBlock, 'focusRating' | 'notes' | 'taskId'>>
+): Promise<WorkBlock | null> {
+  return updateData<WorkBlock | null>('energy.json', energyDefault, (file: EnergyFile) => {
+    const block = file.workBlocks.find((b) => b.id === id);
+    if (!block) return null;
+
+    if (updates.focusRating !== undefined) block.focusRating = updates.focusRating;
+    if (updates.notes !== undefined) block.notes = updates.notes;
+    if (updates.taskId !== undefined) block.taskId = updates.taskId;
+    block.updatedAt = new Date().toISOString();
+
+    return block;
+  });
+}
+
+// Break Logs
+
+export async function getBreakLogsForDate(date: string): Promise<BreakLog[]> {
+  const file = await readData<EnergyFile>('energy.json', energyDefault);
+  return file.breakLogs.filter((b) => b.date === date);
+}
+
+export async function getActiveBreak(): Promise<BreakLog | null> {
+  const file = await readData<EnergyFile>('energy.json', energyDefault);
+  return file.breakLogs.find((b) => b.endTime === null) || null;
+}
+
+export async function startBreak(
+  data: {
+    date: string;
+    startTime: string;
+    activities?: BreakActivityType[];
+    notes?: string | null;
+  }
+): Promise<BreakLog> {
+  return updateData<BreakLog>('energy.json', energyDefault, (file: EnergyFile) => {
+    const now = new Date().toISOString();
+    const breakLog: BreakLog = {
+      id: crypto.randomUUID(),
+      date: data.date,
+      startTime: data.startTime,
+      endTime: null,
+      durationMinutes: null,
+      activities: data.activities ?? [],
+      restorativeScore: null,
+      notes: data.notes ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    file.breakLogs.push(breakLog);
+    return breakLog;
+  });
+}
+
+export async function endBreak(
+  id: string,
+  data: {
+    endTime: string;
+    activities?: BreakActivityType[];
+    restorativeScore?: number | null;
+    notes?: string | null;
+  }
+): Promise<BreakLog | null> {
+  return updateData<BreakLog | null>('energy.json', energyDefault, (file: EnergyFile) => {
+    const breakLog = file.breakLogs.find((b) => b.id === id);
+    if (!breakLog) return null;
+
+    breakLog.endTime = data.endTime;
+    const [startH, startM] = breakLog.startTime.split(':').map(Number);
+    const [endH, endM] = data.endTime.split(':').map(Number);
+    breakLog.durationMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+    if (data.activities !== undefined) breakLog.activities = data.activities;
+    if (data.restorativeScore !== undefined) breakLog.restorativeScore = data.restorativeScore;
+    if (data.notes !== undefined) breakLog.notes = data.notes;
+    breakLog.updatedAt = new Date().toISOString();
+
+    return breakLog;
+  });
+}
+
+export async function logBreak(
+  data: {
+    date: string;
+    startTime: string;
+    endTime: string;
+    activities: BreakActivityType[];
+    restorativeScore?: number | null;
+    notes?: string | null;
+  }
+): Promise<BreakLog> {
+  return updateData<BreakLog>('energy.json', energyDefault, (file: EnergyFile) => {
+    const [startH, startM] = data.startTime.split(':').map(Number);
+    const [endH, endM] = data.endTime.split(':').map(Number);
+    const durationMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+
+    const now = new Date().toISOString();
+    const breakLog: BreakLog = {
+      id: crypto.randomUUID(),
+      date: data.date,
+      startTime: data.startTime,
+      endTime: data.endTime,
+      durationMinutes,
+      activities: data.activities,
+      restorativeScore: data.restorativeScore ?? null,
+      notes: data.notes ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    file.breakLogs.push(breakLog);
+    return breakLog;
+  });
+}
+
+// Energy Patterns & Analytics
+
+export async function getDailyEnergyPattern(date: string): Promise<DailyEnergyPattern> {
+  const file = await readData<EnergyFile>('energy.json', energyDefault);
+
+  const checkIn = file.checkIns.find((c) => c.date === date);
+  const workBlocks = file.workBlocks.filter((b) => b.date === date && b.endTime !== null);
+  const breakLogs = file.breakLogs.filter((b) => b.date === date);
+
+  const totalFocusMinutes = workBlocks.reduce((sum, b) => sum + (b.actualDurationMinutes ?? 0), 0);
+  const focusRatings = workBlocks.filter((b) => b.focusRating !== null).map((b) => b.focusRating!);
+  const restorativeScores = breakLogs.filter((b) => b.restorativeScore !== null).map((b) => b.restorativeScore!);
+
+  return {
+    date,
+    morningEnergy: checkIn?.energyLevel ?? null,
+    mood: checkIn?.mood ?? null,
+    workBlockCount: workBlocks.length,
+    totalFocusMinutes,
+    averageFocusRating: focusRatings.length > 0
+      ? focusRatings.reduce((a, b) => a + b, 0) / focusRatings.length
+      : null,
+    breakCount: breakLogs.length,
+    averageRestorativeScore: restorativeScores.length > 0
+      ? restorativeScores.reduce((a, b) => a + b, 0) / restorativeScores.length
+      : null,
+  };
+}
+
+export async function getWeeklyEnergyPattern(weekStartDate: string): Promise<WeeklyEnergyPattern> {
+  const file = await readData<EnergyFile>('energy.json', energyDefault);
+
+  // Generate 7 days from weekStart
+  const dates: string[] = [];
+  const startDate = new Date(weekStartDate + 'T00:00:00');
+  for (let i = 0; i < 7; i++) {
+    const date = new Date(startDate);
+    date.setDate(date.getDate() + i);
+    dates.push(getLocalDateString(date));
+  }
+
+  const dailyPatterns: DailyEnergyPattern[] = [];
+  for (const date of dates) {
+    const checkIn = file.checkIns.find((c) => c.date === date);
+    const workBlocks = file.workBlocks.filter((b) => b.date === date && b.endTime !== null);
+    const breakLogs = file.breakLogs.filter((b) => b.date === date);
+
+    const totalFocusMinutes = workBlocks.reduce((sum, b) => sum + (b.actualDurationMinutes ?? 0), 0);
+    const focusRatings = workBlocks.filter((b) => b.focusRating !== null).map((b) => b.focusRating!);
+    const restorativeScores = breakLogs.filter((b) => b.restorativeScore !== null).map((b) => b.restorativeScore!);
+
+    dailyPatterns.push({
+      date,
+      morningEnergy: checkIn?.energyLevel ?? null,
+      mood: checkIn?.mood ?? null,
+      workBlockCount: workBlocks.length,
+      totalFocusMinutes,
+      averageFocusRating: focusRatings.length > 0
+        ? focusRatings.reduce((a, b) => a + b, 0) / focusRatings.length
+        : null,
+      breakCount: breakLogs.length,
+      averageRestorativeScore: restorativeScores.length > 0
+        ? restorativeScores.reduce((a, b) => a + b, 0) / restorativeScores.length
+        : null,
+    });
+  }
+
+  // Aggregate stats
+  const energyLevels = dailyPatterns
+    .filter((p) => p.morningEnergy !== null)
+    .map((p) => p.morningEnergy!);
+  const averageEnergy = energyLevels.length > 0
+    ? energyLevels.reduce((a, b) => a + b, 0) / energyLevels.length
+    : null;
+
+  // Most common mood
+  const moodCounts = new Map<MoodType, number>();
+  for (const p of dailyPatterns) {
+    if (p.mood) {
+      moodCounts.set(p.mood, (moodCounts.get(p.mood) ?? 0) + 1);
+    }
+  }
+  let mostCommonMood: MoodType | null = null;
+  let maxMoodCount = 0;
+  for (const [mood, count] of moodCounts) {
+    if (count > maxMoodCount) {
+      maxMoodCount = count;
+      mostCommonMood = mood;
+    }
+  }
+
+  const totalWorkBlocks = dailyPatterns.reduce((sum, p) => sum + p.workBlockCount, 0);
+  const totalFocusMinutes = dailyPatterns.reduce((sum, p) => sum + p.totalFocusMinutes, 0);
+
+  // Find optimal work time (hour with highest average focus rating)
+  const hourlyFocus = new Map<number, { total: number; count: number }>();
+  for (const date of dates) {
+    const workBlocks = file.workBlocks.filter((b) => b.date === date && b.focusRating !== null);
+    for (const block of workBlocks) {
+      const hour = parseInt(block.startTime.split(':')[0], 10);
+      const existing = hourlyFocus.get(hour) ?? { total: 0, count: 0 };
+      existing.total += block.focusRating!;
+      existing.count += 1;
+      hourlyFocus.set(hour, existing);
+    }
+  }
+
+  let optimalWorkTime: string | null = null;
+  let maxAvgFocus = 0;
+  for (const [hour, data] of hourlyFocus) {
+    const avg = data.total / data.count;
+    if (avg > maxAvgFocus) {
+      maxAvgFocus = avg;
+      optimalWorkTime = `${String(hour).padStart(2, '0')}:00`;
+    }
+  }
+
+  // Best restorative activities
+  const activityScores = new Map<BreakActivityType, { total: number; count: number }>();
+  for (const date of dates) {
+    const breakLogs = file.breakLogs.filter((b) => b.date === date && b.restorativeScore !== null);
+    for (const breakLog of breakLogs) {
+      for (const activity of breakLog.activities) {
+        const existing = activityScores.get(activity) ?? { total: 0, count: 0 };
+        existing.total += breakLog.restorativeScore!;
+        existing.count += 1;
+        activityScores.set(activity, existing);
+      }
+    }
+  }
+
+  const sortedActivities = Array.from(activityScores.entries())
+    .map(([activity, data]) => ({ activity, avg: data.total / data.count }))
+    .sort((a, b) => b.avg - a.avg)
+    .slice(0, 3)
+    .map((x) => x.activity);
+
+  return {
+    weekStart: weekStartDate,
+    dailyPatterns,
+    averageEnergy,
+    mostCommonMood,
+    totalWorkBlocks,
+    totalFocusMinutes,
+    optimalWorkTime,
+    bestRestorativeActivities: sortedActivities,
+  };
+}
+
+// Get current energy state (for UI)
+export async function getCurrentEnergyState(date: string): Promise<{
+  checkIn: EnergyCheckIn | null;
+  activeWorkBlock: WorkBlock | null;
+  activeBreak: BreakLog | null;
+  todayWorkBlocks: WorkBlock[];
+  todayBreaks: BreakLog[];
+}> {
+  return withGlobalLock(async () => {
+    const file = await readDataUnlocked<EnergyFile>('energy.json', energyDefault);
+
+    return {
+      checkIn: file.checkIns.find((c) => c.date === date) ?? null,
+      activeWorkBlock: file.workBlocks.find((b) => b.endTime === null) ?? null,
+      activeBreak: file.breakLogs.find((b) => b.endTime === null) ?? null,
+      todayWorkBlocks: file.workBlocks.filter((b) => b.date === date),
+      todayBreaks: file.breakLogs.filter((b) => b.date === date),
+    };
   });
 }
