@@ -67,6 +67,27 @@ interface ProposedOperation {
   data: Record<string, unknown>;
 }
 
+interface IntentionCue {
+  type: 'time' | 'location' | 'activity' | 'event';
+  description: string;
+  timeAnchor: string | null;
+}
+
+interface Intention {
+  id: string;
+  taskId: string | null;
+  cue: IntentionCue;
+  action: string;
+  duration: number | null;
+  isActive: boolean;
+  isCopingPlan: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastTriggeredAt: string | null;
+  successCount: number;
+  missCount: number;
+}
+
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -98,6 +119,13 @@ const BLOCK_TYPE_STYLES = {
 
 const SCHEDULE_OFFSET_MIN = -1;
 const SCHEDULE_OFFSET_MAX = 2;
+
+const CUE_TYPE_CONFIG = {
+  time: { label: 'Time', icon: '⏰', example: 'At 9:00 AM' },
+  location: { label: 'Location', icon: '📍', example: 'When I arrive at office' },
+  activity: { label: 'Activity', icon: '▶', example: 'After morning coffee' },
+  event: { label: 'Event', icon: '📅', example: 'When I finish lunch' },
+} as const;
 
 function getLocalDateKey(date: Date): string {
   const year = date.getFullYear();
@@ -1402,6 +1430,627 @@ function FocusDrawer({
 }
 
 // ============================================
+// INTENTIONS DRAWER (LEFT BOTTOM - SLIDES IN)
+// ============================================
+
+function IntentionCard({
+  intention,
+  onTrigger,
+  onEdit,
+  onDelete,
+  tasks,
+}: {
+  intention: Intention;
+  onTrigger: (id: string, success: boolean) => void;
+  onEdit: (intention: Intention) => void;
+  onDelete: (id: string) => void;
+  tasks: Task[];
+}) {
+  const linkedTask = intention.taskId ? tasks.find((t) => t.id === intention.taskId) : null;
+  const totalTriggers = intention.successCount + intention.missCount;
+  const successRate = totalTriggers > 0 ? Math.round((intention.successCount / totalTriggers) * 100) : null;
+  const cueConfig = CUE_TYPE_CONFIG[intention.cue.type];
+
+  return (
+    <div
+      className={`
+        p-3 rounded-lg
+        ${intention.isActive ? 'bg-slate-800/40 border border-slate-700/50' : 'bg-slate-900/30 border border-slate-800/30 opacity-60'}
+        transition-all duration-200
+        hover:border-cyan-500/30
+      `}
+    >
+      {/* Cue */}
+      <div className="flex items-center gap-2 text-xs text-slate-400 mb-2">
+        <span>{cueConfig.icon}</span>
+        <span className="font-mono uppercase tracking-wider">{intention.cue.description}</span>
+        {intention.cue.timeAnchor && (
+          <span className="text-cyan-400 font-mono">@ {intention.cue.timeAnchor}</span>
+        )}
+      </div>
+
+      {/* Arrow */}
+      <div className="text-cyan-400 text-xs mb-1">↓ then I will</div>
+
+      {/* Action */}
+      <p className="text-slate-200 text-sm font-medium mb-2">{intention.action}</p>
+
+      {/* Duration & Linked Task */}
+      <div className="flex items-center gap-3 text-xs text-slate-500 mb-3">
+        {intention.duration && (
+          <span className="font-mono">{intention.duration} min</span>
+        )}
+        {linkedTask && (
+          <span className="truncate">→ {linkedTask.title}</span>
+        )}
+        {intention.isCopingPlan && (
+          <span className="text-amber-400 font-mono uppercase">Coping Plan</span>
+        )}
+      </div>
+
+      {/* Stats */}
+      {totalTriggers > 0 && (
+        <div className="flex items-center gap-2 text-xs mb-3">
+          <span className={`font-mono ${successRate !== null && successRate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
+            {successRate}% success
+          </span>
+          <span className="text-slate-600">({totalTriggers} triggers)</span>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => onTrigger(intention.id, true)}
+          className="
+            flex-1 py-1.5 rounded text-xs font-medium
+            bg-emerald-600/20 border border-emerald-500/30
+            text-emerald-400
+            hover:bg-emerald-600/30
+            transition-colors
+          "
+        >
+          ✓ Did it
+        </button>
+        <button
+          onClick={() => onTrigger(intention.id, false)}
+          className="
+            flex-1 py-1.5 rounded text-xs font-medium
+            bg-slate-700/30 border border-slate-600/30
+            text-slate-400
+            hover:bg-slate-700/50
+            transition-colors
+          "
+        >
+          ✗ Skipped
+        </button>
+        <button
+          onClick={() => onEdit(intention)}
+          className="
+            p-1.5 rounded text-xs
+            text-slate-500 hover:text-slate-300
+            transition-colors
+          "
+          aria-label="Edit intention"
+        >
+          ✎
+        </button>
+        <button
+          onClick={() => onDelete(intention.id)}
+          className="
+            p-1.5 rounded text-xs
+            text-slate-500 hover:text-rose-400
+            transition-colors
+          "
+          aria-label="Delete intention"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CreateIntentionModal({
+  isOpen,
+  onClose,
+  onCreate,
+  tasks,
+  editingIntention,
+  onUpdate,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onCreate: (data: {
+    taskId: string | null;
+    cue: IntentionCue;
+    action: string;
+    duration: number | null;
+    isCopingPlan: boolean;
+  }) => void;
+  tasks: Task[];
+  editingIntention: Intention | null;
+  onUpdate: (id: string, data: {
+    taskId?: string | null;
+    cue?: IntentionCue;
+    action?: string;
+    duration?: number | null;
+    isActive?: boolean;
+    isCopingPlan?: boolean;
+  }) => void;
+}) {
+  const [cueType, setCueType] = useState<'time' | 'location' | 'activity' | 'event'>('activity');
+  const [cueDescription, setCueDescription] = useState('');
+  const [timeAnchor, setTimeAnchor] = useState('');
+  const [action, setAction] = useState('');
+  const [duration, setDuration] = useState('');
+  const [taskId, setTaskId] = useState<string>('');
+  const [isCopingPlan, setIsCopingPlan] = useState(false);
+
+  useEffect(() => {
+    if (editingIntention) {
+      setCueType(editingIntention.cue.type);
+      setCueDescription(editingIntention.cue.description);
+      setTimeAnchor(editingIntention.cue.timeAnchor || '');
+      setAction(editingIntention.action);
+      setDuration(editingIntention.duration?.toString() || '');
+      setTaskId(editingIntention.taskId || '');
+      setIsCopingPlan(editingIntention.isCopingPlan);
+    } else {
+      setCueType('activity');
+      setCueDescription('');
+      setTimeAnchor('');
+      setAction('');
+      setDuration('');
+      setTaskId('');
+      setIsCopingPlan(false);
+    }
+  }, [editingIntention, isOpen]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cueDescription.trim() || !action.trim()) return;
+
+    const intentionData = {
+      taskId: taskId || null,
+      cue: {
+        type: cueType,
+        description: cueDescription.trim(),
+        timeAnchor: timeAnchor || null,
+      },
+      action: action.trim(),
+      duration: duration ? parseInt(duration, 10) : null,
+      isCopingPlan,
+    };
+
+    if (editingIntention) {
+      onUpdate(editingIntention.id, intentionData);
+    } else {
+      onCreate(intentionData);
+    }
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  const activeTasks = tasks.filter((t) => t.status === 'active');
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <GlassPanel className="relative w-full max-w-md p-6" glow>
+        <h3 className="text-slate-200 font-semibold mb-4">
+          {editingIntention ? 'Edit Intention' : 'Create Implementation Intention'}
+        </h3>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Cue Type */}
+          <div>
+            <label className="block text-slate-400 text-xs font-mono uppercase tracking-wider mb-2">
+              Cue Type
+            </label>
+            <div className="grid grid-cols-4 gap-2">
+              {(Object.keys(CUE_TYPE_CONFIG) as Array<keyof typeof CUE_TYPE_CONFIG>).map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => setCueType(type)}
+                  className={`
+                    p-2 rounded text-xs
+                    border transition-all
+                    ${cueType === type
+                      ? 'bg-cyan-600/20 border-cyan-500/50 text-cyan-400'
+                      : 'bg-slate-800/30 border-slate-700/50 text-slate-400 hover:border-slate-600'}
+                  `}
+                >
+                  <span className="block mb-1">{CUE_TYPE_CONFIG[type].icon}</span>
+                  {CUE_TYPE_CONFIG[type].label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Cue Description */}
+          <div>
+            <label className="block text-slate-400 text-xs font-mono uppercase tracking-wider mb-2">
+              When / After (cue)
+            </label>
+            <input
+              type="text"
+              value={cueDescription}
+              onChange={(e) => setCueDescription(e.target.value)}
+              placeholder={CUE_TYPE_CONFIG[cueType].example}
+              className="
+                w-full p-3 rounded-lg
+                bg-slate-800/50 border border-slate-700/50
+                text-slate-200 placeholder-slate-500
+                focus:outline-none focus:border-cyan-500/50
+                text-sm
+              "
+              required
+            />
+          </div>
+
+          {/* Time Anchor (optional for time-based) */}
+          {cueType === 'time' && (
+            <div>
+              <label className="block text-slate-400 text-xs font-mono uppercase tracking-wider mb-2">
+                Time (optional)
+              </label>
+              <input
+                type="time"
+                value={timeAnchor}
+                onChange={(e) => setTimeAnchor(e.target.value)}
+                className="
+                  w-full p-3 rounded-lg
+                  bg-slate-800/50 border border-slate-700/50
+                  text-slate-200
+                  focus:outline-none focus:border-cyan-500/50
+                  text-sm
+                "
+              />
+            </div>
+          )}
+
+          {/* Action */}
+          <div>
+            <label className="block text-slate-400 text-xs font-mono uppercase tracking-wider mb-2">
+              I will (action)
+            </label>
+            <input
+              type="text"
+              value={action}
+              onChange={(e) => setAction(e.target.value)}
+              placeholder="Open my document and write for 25 minutes"
+              className="
+                w-full p-3 rounded-lg
+                bg-slate-800/50 border border-slate-700/50
+                text-slate-200 placeholder-slate-500
+                focus:outline-none focus:border-cyan-500/50
+                text-sm
+              "
+              required
+            />
+          </div>
+
+          {/* Duration */}
+          <div>
+            <label className="block text-slate-400 text-xs font-mono uppercase tracking-wider mb-2">
+              Duration (minutes, optional)
+            </label>
+            <input
+              type="number"
+              value={duration}
+              onChange={(e) => setDuration(e.target.value)}
+              placeholder="25"
+              min="1"
+              max="480"
+              className="
+                w-full p-3 rounded-lg
+                bg-slate-800/50 border border-slate-700/50
+                text-slate-200 placeholder-slate-500
+                focus:outline-none focus:border-cyan-500/50
+                text-sm
+              "
+            />
+          </div>
+
+          {/* Link to Task */}
+          <div>
+            <label className="block text-slate-400 text-xs font-mono uppercase tracking-wider mb-2">
+              Link to Task (optional)
+            </label>
+            <select
+              value={taskId}
+              onChange={(e) => setTaskId(e.target.value)}
+              className="
+                w-full p-3 rounded-lg
+                bg-slate-800/50 border border-slate-700/50
+                text-slate-200
+                focus:outline-none focus:border-cyan-500/50
+                text-sm
+              "
+            >
+              <option value="">No linked task</option>
+              {activeTasks.map((task) => (
+                <option key={task.id} value={task.id}>
+                  {task.title}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Coping Plan Toggle */}
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={isCopingPlan}
+              onChange={(e) => setIsCopingPlan(e.target.checked)}
+              className="accent-amber-500"
+            />
+            <span className="text-slate-300 text-sm">This is a coping plan (for handling obstacles)</span>
+          </label>
+
+          {/* Preview */}
+          <div className="p-3 rounded-lg bg-slate-900/50 border border-slate-700/30">
+            <p className="text-slate-500 text-xs font-mono uppercase tracking-wider mb-2">Preview</p>
+            <p className="text-slate-300 text-sm">
+              <span className="text-cyan-400">If</span> {cueDescription || '[cue]'},{' '}
+              <span className="text-cyan-400">then</span> I will {action || '[action]'}
+              {duration && <span className="text-slate-500"> for {duration} minutes</span>}.
+            </p>
+          </div>
+
+          {/* Buttons */}
+          <div className="flex gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="
+                flex-1 py-2 rounded
+                bg-slate-700 hover:bg-slate-600
+                text-slate-300 text-sm
+                transition-colors
+              "
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!cueDescription.trim() || !action.trim()}
+              className="
+                flex-1 py-2 rounded
+                bg-cyan-600 hover:bg-cyan-500
+                disabled:bg-slate-700 disabled:cursor-not-allowed
+                text-white text-sm font-medium
+                transition-colors
+              "
+            >
+              {editingIntention ? 'Save Changes' : 'Create Intention'}
+            </button>
+          </div>
+        </form>
+      </GlassPanel>
+    </div>
+  );
+}
+
+function IntentionsDrawer({
+  isOpen,
+  onToggle,
+  intentions,
+  tasks,
+  onTrigger,
+  onCreateClick,
+  onEdit,
+  onDelete,
+  onToggleActive,
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+  intentions: Intention[];
+  tasks: Task[];
+  onTrigger: (id: string, success: boolean) => void;
+  onCreateClick: () => void;
+  onEdit: (intention: Intention) => void;
+  onDelete: (id: string) => void;
+  onToggleActive: (id: string, active: boolean) => void;
+}) {
+  const activeIntentions = intentions.filter((i) => i.isActive && !i.isCopingPlan);
+  const copingPlans = intentions.filter((i) => i.isActive && i.isCopingPlan);
+  const inactiveIntentions = intentions.filter((i) => !i.isActive);
+  const [showInactive, setShowInactive] = useState(false);
+
+  return (
+    <>
+      {/* Toggle Button */}
+      <button
+        onClick={onToggle}
+        className={`
+          fixed left-4 bottom-32 z-50
+          w-12 h-12 rounded-full
+          bg-slate-900/80 backdrop-blur-md
+          border border-slate-700/50
+          flex items-center justify-center
+          transition-all duration-300
+          hover:bg-slate-800/80 hover:border-cyan-500/30
+          group
+          ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
+        `}
+        style={{ WebkitBackdropFilter: 'blur(12px)' }}
+        aria-label="Open intentions"
+      >
+        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-lg">
+          ⟡
+        </span>
+        {activeIntentions.length > 0 && (
+          <span className="absolute -top-1 -right-1 w-5 h-5 bg-cyan-500 rounded-full text-xs text-white flex items-center justify-center">
+            {activeIntentions.length}
+          </span>
+        )}
+      </button>
+
+      {/* Drawer Panel */}
+      <div
+        className={`
+          fixed left-0 bottom-0 z-40
+          w-80 max-h-[70vh]
+          transition-transform duration-500 ease-out
+          ${isOpen ? 'translate-x-0 translate-y-0' : '-translate-x-full'}
+        `}
+      >
+        <GlassPanel className="h-full flex flex-col rounded-l-none rounded-b-none">
+          {/* Header */}
+          <div className="flex items-center justify-between p-4 border-b border-slate-700/50">
+            <div className="flex items-center gap-2">
+              <span className="text-cyan-400 text-sm font-mono">⟡</span>
+              <h2 className="text-slate-200 font-semibold tracking-wide">IF-THEN PLANS</h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onCreateClick}
+                className="
+                  px-3 py-1 rounded text-xs
+                  bg-cyan-600/20 border border-cyan-500/30
+                  text-cyan-400
+                  hover:bg-cyan-600/30
+                  transition-colors
+                "
+              >
+                + New
+              </button>
+              <button
+                onClick={onToggle}
+                className="text-slate-500 hover:text-slate-300 transition-colors p-1"
+                aria-label="Close intentions"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
+            {/* Active Intentions */}
+            <div>
+              <p className="text-slate-400 text-xs font-mono uppercase tracking-wider mb-2">
+                Active ({activeIntentions.length}/3 recommended)
+              </p>
+              {activeIntentions.length === 0 ? (
+                <p className="text-slate-600 text-sm italic py-2">
+                  No active intentions. Create one to automate your most important behaviors.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {activeIntentions.map((intention) => (
+                    <IntentionCard
+                      key={intention.id}
+                      intention={intention}
+                      onTrigger={onTrigger}
+                      onEdit={onEdit}
+                      onDelete={onDelete}
+                      tasks={tasks}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Coping Plans */}
+            {copingPlans.length > 0 && (
+              <div>
+                <p className="text-amber-400 text-xs font-mono uppercase tracking-wider mb-2">
+                  Coping Plans ({copingPlans.length})
+                </p>
+                <div className="space-y-2">
+                  {copingPlans.map((intention) => (
+                    <IntentionCard
+                      key={intention.id}
+                      intention={intention}
+                      onTrigger={onTrigger}
+                      onEdit={onEdit}
+                      onDelete={onDelete}
+                      tasks={tasks}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Inactive */}
+            {inactiveIntentions.length > 0 && (
+              <div className="pt-2 border-t border-slate-700/30">
+                <button
+                  onClick={() => setShowInactive((v) => !v)}
+                  className="
+                    w-full flex items-center gap-2 py-2
+                    text-slate-400 hover:text-slate-200
+                    transition-colors
+                  "
+                >
+                  <span className="text-slate-600 text-xs font-mono">◇</span>
+                  <span className="text-xs font-mono uppercase tracking-wider">
+                    Inactive
+                  </span>
+                  <span className="text-slate-600 text-xs">({inactiveIntentions.length})</span>
+                  <span className="ml-auto text-slate-600">
+                    {showInactive ? '▼' : '▶'}
+                  </span>
+                </button>
+
+                {showInactive && (
+                  <div className="space-y-2 mt-2">
+                    {inactiveIntentions.map((intention) => (
+                      <div key={intention.id} className="flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <IntentionCard
+                            intention={intention}
+                            onTrigger={onTrigger}
+                            onEdit={onEdit}
+                            onDelete={onDelete}
+                            tasks={tasks}
+                          />
+                        </div>
+                        <button
+                          onClick={() => onToggleActive(intention.id, true)}
+                          className="
+                            p-2 rounded text-xs
+                            text-slate-500 hover:text-cyan-400
+                            transition-colors
+                          "
+                          title="Activate"
+                        >
+                          ↑
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="p-4 border-t border-slate-700/50">
+            <p className="text-slate-600 text-xs font-mono text-center">
+              "After [cue], I will [action]"
+            </p>
+          </div>
+        </GlassPanel>
+      </div>
+
+      {/* Backdrop */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 bg-black/[0.06] z-30"
+          onClick={onToggle}
+        />
+      )}
+    </>
+  );
+}
+
+// ============================================
 // CHAT TOGGLE BUTTON (FLOATING)
 // ============================================
 
@@ -1458,6 +2107,12 @@ export default function ProfFlowPage() {
   const schedulePlanCacheRef = useRef<Record<string, Plan | null>>({});
   const [scheduleReloadNonce, setScheduleReloadNonce] = useState(0);
 
+  // Intentions State
+  const [intentions, setIntentions] = useState<Intention[]>([]);
+  const [intentionsDrawerOpen, setIntentionsDrawerOpen] = useState(false);
+  const [intentionModalOpen, setIntentionModalOpen] = useState(false);
+  const [editingIntention, setEditingIntention] = useState<Intention | null>(null);
+
   // UI State
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
   const [scheduleDrawerOpen, setScheduleDrawerOpen] = useState(false);
@@ -1484,6 +2139,7 @@ export default function ProfFlowPage() {
   useEffect(() => {
     fetchTasks();
     fetchPlan();
+    fetchIntentions();
   }, []);
 
   // Load plan for the schedule viewer day (separate from today's plan used for focus).
@@ -1590,6 +2246,133 @@ export default function ProfFlowPage() {
       console.error('Failed to fetch plan:', err);
     }
   };
+
+  const fetchIntentions = async () => {
+    try {
+      const res = await fetch('/api/intentions');
+      if (!res.ok) throw new Error('Failed to fetch intentions');
+      const data = await res.json();
+      setIntentions(data.intentions || []);
+    } catch (err) {
+      console.error('Failed to fetch intentions:', err);
+    }
+  };
+
+  const handleCreateIntention = useCallback(async (intentionData: {
+    taskId: string | null;
+    cue: IntentionCue;
+    action: string;
+    duration: number | null;
+    isCopingPlan: boolean;
+  }) => {
+    try {
+      const res = await fetch('/api/intentions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(intentionData),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        console.error('Failed to create intention:', errorData);
+        return;
+      }
+
+      await fetchIntentions();
+    } catch (err) {
+      console.error('Failed to create intention:', err);
+    }
+  }, []);
+
+  const handleUpdateIntention = useCallback(async (id: string, updates: {
+    taskId?: string | null;
+    cue?: IntentionCue;
+    action?: string;
+    duration?: number | null;
+    isActive?: boolean;
+    isCopingPlan?: boolean;
+  }) => {
+    try {
+      const res = await fetch(`/api/intentions/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        console.error('Failed to update intention:', errorData);
+        return;
+      }
+
+      await fetchIntentions();
+    } catch (err) {
+      console.error('Failed to update intention:', err);
+    }
+  }, []);
+
+  const handleDeleteIntention = useCallback(async (id: string) => {
+    if (!confirm('Delete this intention?')) return;
+
+    try {
+      const res = await fetch(`/api/intentions/${id}`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok) {
+        console.error('Failed to delete intention');
+        return;
+      }
+
+      await fetchIntentions();
+    } catch (err) {
+      console.error('Failed to delete intention:', err);
+    }
+  }, []);
+
+  const handleTriggerIntention = useCallback(async (id: string, success: boolean) => {
+    // Optimistic update
+    setIntentions((prev) =>
+      prev.map((i) =>
+        i.id === id
+          ? {
+              ...i,
+              lastTriggeredAt: new Date().toISOString(),
+              successCount: success ? i.successCount + 1 : i.successCount,
+              missCount: success ? i.missCount : i.missCount + 1,
+            }
+          : i
+      )
+    );
+
+    try {
+      const res = await fetch(`/api/intentions/${id}/trigger`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ success }),
+      });
+
+      if (!res.ok) {
+        console.error('Failed to record trigger');
+        await fetchIntentions();
+        return;
+      }
+
+      // Could show feedback from response here
+    } catch (err) {
+      console.error('Failed to record trigger:', err);
+      await fetchIntentions();
+    }
+  }, []);
+
+  const handleEditIntention = useCallback((intention: Intention) => {
+    setEditingIntention(intention);
+    setIntentionModalOpen(true);
+  }, []);
+
+  const handleToggleIntentionActive = useCallback(async (id: string, active: boolean) => {
+    await handleUpdateIntention(id, { isActive: active });
+  }, [handleUpdateIntention]);
 
   const handleSetTaskCompleted = useCallback(async (task: Task, completed: boolean) => {
     setTasks((prev) =>
@@ -1813,7 +2596,7 @@ export default function ProfFlowPage() {
   return (
     <div className="min-h-screen h-screen overflow-hidden bg-slate-950 text-slate-100">
       {/* Background */}
-      <AmbientBackground dim={taskDrawerOpen || scheduleDrawerOpen || focusDrawerOpen} />
+      <AmbientBackground dim={taskDrawerOpen || scheduleDrawerOpen || focusDrawerOpen || intentionsDrawerOpen} />
 
       {/* Task Drawer (Left - slides in) */}
       <TaskDrawer
@@ -1851,6 +2634,35 @@ export default function ProfFlowPage() {
         onComplete={handleCompleteTask}
       />
 
+      {/* Intentions Drawer (Left Bottom - slides in) */}
+      <IntentionsDrawer
+        isOpen={intentionsDrawerOpen}
+        onToggle={() => setIntentionsDrawerOpen(!intentionsDrawerOpen)}
+        intentions={intentions}
+        tasks={tasks}
+        onTrigger={handleTriggerIntention}
+        onCreateClick={() => {
+          setEditingIntention(null);
+          setIntentionModalOpen(true);
+        }}
+        onEdit={handleEditIntention}
+        onDelete={handleDeleteIntention}
+        onToggleActive={handleToggleIntentionActive}
+      />
+
+      {/* Create/Edit Intention Modal */}
+      <CreateIntentionModal
+        isOpen={intentionModalOpen}
+        onClose={() => {
+          setIntentionModalOpen(false);
+          setEditingIntention(null);
+        }}
+        onCreate={handleCreateIntention}
+        tasks={tasks}
+        editingIntention={editingIntention}
+        onUpdate={handleUpdateIntention}
+      />
+
       {/* Main Content Area */}
       <div className="relative z-10 h-full flex">
         {/* Spacer for left toggle button */}
@@ -1883,7 +2695,7 @@ export default function ProfFlowPage() {
 
       {/* Version indicator */}
       <div className="fixed bottom-4 left-4 z-10">
-        <p className="text-slate-600 text-xs font-mono">PROFFLOW v1.8 // AMBIENT</p>
+        <p className="text-slate-600 text-xs font-mono">PROFFLOW v1.9 // INTENTIONS</p>
       </div>
     </div>
   );

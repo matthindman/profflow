@@ -146,6 +146,33 @@ export const LearningsFileSchemaV2 = z.object({
   learnings: z.array(LearningSchema),
 });
 
+// Implementation Intentions schemas
+export const IntentionCueSchema = z.object({
+  type: z.enum(['time', 'location', 'activity', 'event']),
+  description: z.string().min(1),
+  timeAnchor: TimeStringSchema.nullable(),
+});
+
+export const ImplementationIntentionSchema = z.object({
+  id: UUIDSchema,
+  taskId: UUIDSchema.nullable(),
+  cue: IntentionCueSchema,
+  action: z.string().min(1),
+  duration: z.number().int().positive().nullable(),
+  isActive: z.boolean(),
+  isCopingPlan: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  lastTriggeredAt: z.string().nullable(),
+  successCount: z.number().int().min(0),
+  missCount: z.number().int().min(0),
+});
+
+export const IntentionsFileSchemaV1 = z.object({
+  version: z.literal(1),
+  intentions: z.array(ImplementationIntentionSchema),
+});
+
 export const FILE_SCHEMAS: Record<
   string,
   { current: number; schemas: Record<number, z.ZodSchema> }
@@ -173,5 +200,9 @@ export const FILE_SCHEMAS: Record<
   'learnings.json': {
     current: 2,
     schemas: { 2: LearningsFileSchemaV2 },
+  },
+  'intentions.json': {
+    current: 1,
+    schemas: { 1: IntentionsFileSchemaV1 },
   },
 };

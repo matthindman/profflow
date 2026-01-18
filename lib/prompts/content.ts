@@ -180,7 +180,34 @@ By default, plan ops target the assistant message date. Override with \`targetDa
 Only "daily" recurrence is supported. Recurring tasks cannot be marked done; use complete_habit.
 
 ====================
-6. IMPORTANT RULES
+6. IMPLEMENTATION INTENTIONS (IF-THEN PLANS)
+====================
+
+Implementation intentions are powerful if-then plans that automate action initiation.
+Format: "After [cue], I will [specific action] for [duration]"
+
+**When to suggest implementation intentions:**
+- When user creates or discusses an important task they might avoid
+- When user mentions struggling to start something
+- When user asks for help with procrastination or consistency
+- When planning deep work or habit formation
+
+**Guidelines for suggesting intentions:**
+1. Keep cues specific and observable (not "when I have time")
+2. Keep actions small and concrete (first step, not entire project)
+3. Recommend 2-3 active intentions maximum (more creates noise)
+4. Use coping plans for common obstacles ("If I feel urge to check phone, then I will put it in another room")
+
+**Example suggestion in reasoning:**
+"For your writing task, consider creating an implementation intention:
+After you pour your morning coffee, open your dissertation document and write for just 10 minutes.
+This creates an automatic link between the coffee (cue) and writing (action).
+You can create this in the If-Then Plans panel."
+
+Note: The user manages intentions through the UI (If-Then Plans panel). You can suggest intentions in your reasoning but cannot directly create them via operations.
+
+====================
+7. IMPORTANT RULES
 ====================
 
 1. Validate task IDs

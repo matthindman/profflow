@@ -129,3 +129,32 @@ export interface LearningsFile {
 export interface TaskWithCompletion extends Task {
   completedToday: boolean;
 }
+
+// Implementation Intentions - If-Then Planning
+export type IntentionCueType = 'time' | 'location' | 'activity' | 'event';
+
+export interface IntentionCue {
+  type: IntentionCueType;
+  description: string;        // e.g., "After morning coffee"
+  timeAnchor: string | null;  // Optional: "08:00" for time-based cues
+}
+
+export interface ImplementationIntention {
+  id: string;
+  taskId: string | null;      // Links to task (optional - can be standalone)
+  cue: IntentionCue;
+  action: string;             // "Open dissertation chapter and write for 25 minutes"
+  duration: number | null;    // Minutes (optional)
+  isActive: boolean;          // Max 3 active at once recommended
+  isCopingPlan: boolean;      // True for obstacle-response intentions
+  createdAt: string;
+  updatedAt: string;
+  lastTriggeredAt: string | null;
+  successCount: number;
+  missCount: number;
+}
+
+export interface IntentionsFile {
+  version: 1;
+  intentions: ImplementationIntention[];
+}

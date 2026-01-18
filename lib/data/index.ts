@@ -3,7 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { AsyncLocalStorage } from 'async_hooks';
 import lockfile from 'proper-lockfile';
-import { Task, TasksFile, Plan, PlansFile, Message, MessagesFile, TaskCompletion, CompletionsFile, SettingsFile, LearningsFile, TaskCategory, ProposedOperation, OperationResult, TaskWithCompletion } from '@/types/data';
+import { Task, TasksFile, Plan, PlansFile, Message, MessagesFile, TaskCompletion, CompletionsFile, SettingsFile, LearningsFile, TaskCategory, ProposedOperation, OperationResult, TaskWithCompletion, ImplementationIntention, IntentionsFile, IntentionCue } from '@/types/data';
 import { FILE_SCHEMAS } from '@/lib/validation/schemas';
 import { getDataDir } from '@/lib/utils/paths';
 import { getLocalDateString } from '@/lib/utils/date';
@@ -734,5 +734,151 @@ export async function getTasksWithCompletions(localDate: string): Promise<TaskWi
       ...task,
       completedToday: todayCompletions.has(task.id),
     }));
+  });
+}
+
+// ============================================
+// Implementation Intentions
+// ============================================
+
+const intentionsDefault = (): IntentionsFile => ({ version: 1, intentions: [] });
+
+export async function getIntentions(): Promise<ImplementationIntention[]> {
+  const file = await readData<IntentionsFile>('intentions.json', intentionsDefault);
+  // Return sorted: active first, then by creation date
+  return [...file.intentions].sort((a, b) => {
+    if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+}
+
+export async function getActiveIntentions(): Promise<ImplementationIntention[]> {
+  const file = await readData<IntentionsFile>('intentions.json', intentionsDefault);
+  return file.intentions.filter((i) => i.isActive);
+}
+
+export async function getIntentionById(id: string): Promise<ImplementationIntention | null> {
+  const file = await readData<IntentionsFile>('intentions.json', intentionsDefault);
+  return file.intentions.find((i) => i.id === id) || null;
+}
+
+export interface CreateIntentionInput {
+  taskId?: string | null;
+  cue: IntentionCue;
+  action: string;
+  duration?: number | null;
+  isActive?: boolean;
+  isCopingPlan?: boolean;
+}
+
+export async function createIntention(input: CreateIntentionInput): Promise<ImplementationIntention> {
+  return updateData<ImplementationIntention>('intentions.json', intentionsDefault, (file: IntentionsFile) => {
+    const now = new Date().toISOString();
+    const newIntention: ImplementationIntention = {
+      id: crypto.randomUUID(),
+      taskId: input.taskId ?? null,
+      cue: input.cue,
+      action: input.action,
+      duration: input.duration ?? null,
+      isActive: input.isActive ?? true,
+      isCopingPlan: input.isCopingPlan ?? false,
+      createdAt: now,
+      updatedAt: now,
+      lastTriggeredAt: null,
+      successCount: 0,
+      missCount: 0,
+    };
+    file.intentions.push(newIntention);
+    return newIntention;
+  });
+}
+
+export interface UpdateIntentionInput {
+  taskId?: string | null;
+  cue?: IntentionCue;
+  action?: string;
+  duration?: number | null;
+  isActive?: boolean;
+  isCopingPlan?: boolean;
+}
+
+export async function updateIntention(
+  id: string,
+  updates: UpdateIntentionInput
+): Promise<ImplementationIntention | null> {
+  return updateData<ImplementationIntention | null>('intentions.json', intentionsDefault, (file: IntentionsFile) => {
+    const index = file.intentions.findIndex((i) => i.id === id);
+    if (index === -1) return null;
+
+    const intention = file.intentions[index];
+    file.intentions[index] = {
+      ...intention,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    return file.intentions[index];
+  });
+}
+
+export async function deleteIntention(id: string): Promise<boolean> {
+  return updateData<boolean>('intentions.json', intentionsDefault, (file: IntentionsFile) => {
+    const initialLength = file.intentions.length;
+    file.intentions = file.intentions.filter((i) => i.id !== id);
+    return file.intentions.length < initialLength;
+  });
+}
+
+export async function recordIntentionTrigger(
+  id: string,
+  success: boolean
+): Promise<ImplementationIntention | null> {
+  return updateData<ImplementationIntention | null>('intentions.json', intentionsDefault, (file: IntentionsFile) => {
+    const index = file.intentions.findIndex((i) => i.id === id);
+    if (index === -1) return null;
+
+    const intention = file.intentions[index];
+    const now = new Date().toISOString();
+
+    file.intentions[index] = {
+      ...intention,
+      lastTriggeredAt: now,
+      updatedAt: now,
+      successCount: success ? intention.successCount + 1 : intention.successCount,
+      missCount: success ? intention.missCount : intention.missCount + 1,
+    };
+    return file.intentions[index];
+  });
+}
+
+export interface IntentionAuditSummary {
+  intention: ImplementationIntention;
+  totalTriggers: number;
+  successRate: number;
+  needsReview: boolean;
+  suggestion: string | null;
+}
+
+export async function getIntentionsAudit(): Promise<IntentionAuditSummary[]> {
+  const intentions = await getIntentions();
+
+  return intentions.map((intention) => {
+    const totalTriggers = intention.successCount + intention.missCount;
+    const successRate = totalTriggers > 0 ? intention.successCount / totalTriggers : 0;
+    const needsReview = totalTriggers >= 3 && successRate < 0.5;
+
+    let suggestion: string | null = null;
+    if (needsReview) {
+      suggestion = `This intention fires ${Math.round(successRate * 100)}% of the time. Consider adjusting the cue or making the action smaller.`;
+    } else if (totalTriggers === 0 && intention.isActive) {
+      suggestion = 'This intention hasn\'t been triggered yet. Make sure the cue is specific and visible.';
+    }
+
+    return {
+      intention,
+      totalTriggers,
+      successRate,
+      needsReview,
+      suggestion,
+    };
   });
 }
