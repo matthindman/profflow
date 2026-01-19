@@ -173,6 +173,146 @@ export const IntentionsFileSchemaV1 = z.object({
   intentions: z.array(ImplementationIntentionSchema),
 });
 
+// ============================================
+// Energy & Recovery Tracking Schemas
+// ============================================
+
+export const MoodTypeSchema = z.enum(['energized', 'calm', 'neutral', 'tired', 'stressed']);
+
+export const EnergyCheckInSchema = z.object({
+  id: UUIDSchema,
+  date: DateStringSchema,
+  energyLevel: z.number().int().min(1).max(10),
+  mood: MoodTypeSchema,
+  notes: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+export const WorkBlockSchema = z.object({
+  id: UUIDSchema,
+  date: DateStringSchema,
+  startTime: TimeStringSchema,
+  endTime: TimeStringSchema.nullable(),
+  plannedDurationMinutes: z.number().int().min(1).max(240),
+  actualDurationMinutes: z.number().int().min(0).nullable(),
+  taskId: UUIDSchema.nullable(),
+  focusRating: z.number().int().min(1).max(5).nullable(),
+  notes: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const BreakActivityTypeSchema = z.enum([
+  'walk',
+  'stretch',
+  'meditation',
+  'snack',
+  'social',
+  'phone',
+  'nap',
+  'fresh_air',
+  'other',
+]);
+
+export const BreakLogSchema = z.object({
+  id: UUIDSchema,
+  date: DateStringSchema,
+  startTime: TimeStringSchema,
+  endTime: TimeStringSchema.nullable(),
+  durationMinutes: z.number().int().min(0).nullable(),
+  activities: z.array(BreakActivityTypeSchema),
+  restorativeScore: z.number().int().min(1).max(5).nullable(),
+  notes: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const EnergyFileSchemaV2 = z.object({
+  version: z.literal(2),
+  checkIns: z.array(EnergyCheckInSchema),
+  workBlocks: z.array(WorkBlockSchema),
+  breakLogs: z.array(BreakLogSchema),
+});
+
+// ============================================
+// Weekly Review Ritual Schemas
+// ============================================
+
+export const ReviewStepTypeSchema = z.enum([
+  'celebrate',
+  'challenges',
+  'learnings',
+  'values',
+  'big_three',
+  'schedule',
+]);
+
+export const TaskCategorySchema = z.enum(['research', 'teaching_service', 'family', 'health']);
+
+export const BigThreeItemSchema = z.object({
+  id: UUIDSchema,
+  title: z.string().min(1),
+  category: TaskCategorySchema,
+  linkedTaskId: UUIDSchema.nullable(),
+  completed: z.boolean(),
+});
+
+export const WeeklyReviewMetricsSchema = z.object({
+  tasksCompleted: z.number().int().min(0),
+  focusBlocksCompleted: z.number().int().min(0),
+  totalFocusMinutes: z.number().int().min(0),
+  averageEnergy: z.number().min(1).max(10).nullable(),
+  averageFocusRating: z.number().min(1).max(5).nullable(),
+  habitsCompletedRate: z.number().min(0).max(100).nullable(),
+});
+
+export const WeeklyReviewSchema = z.object({
+  id: UUIDSchema,
+  weekStart: DateStringSchema,
+  weekEnd: DateStringSchema,
+
+  // Step 1: Celebrate
+  wins: z.array(z.string()),
+  progressRating: z.number().int().min(1).max(5).nullable(),
+
+  // Step 2: Challenges
+  challenges: z.array(z.string()),
+  obstacles: z.array(z.string()),
+
+  // Step 3: Learnings
+  learnings: z.array(z.string()),
+  insights: z.array(z.string()),
+
+  // Step 4: Values check
+  valuesAlignment: z.number().int().min(1).max(5).nullable(),
+  valuesReflection: z.string().nullable(),
+
+  // Step 5: Big Three
+  bigThree: z.array(BigThreeItemSchema).max(3),
+
+  // Step 6: Schedule confirmation
+  scheduleConfirmed: z.boolean(),
+  scheduledFocusBlocks: z.number().int().min(0).nullable(),
+  capacityCheck: z.number().min(0).max(100).nullable(),
+
+  // Metrics snapshot
+  metrics: WeeklyReviewMetricsSchema,
+
+  // Metadata
+  status: z.enum(['in_progress', 'completed']),
+  currentStep: ReviewStepTypeSchema,
+  startedAt: z.string(),
+  completedAt: z.string().nullable(),
+  durationMinutes: z.number().int().min(0).nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const WeeklyReviewsFileSchemaV2 = z.object({
+  version: z.literal(2),
+  reviews: z.array(WeeklyReviewSchema),
+});
+
 export const FILE_SCHEMAS: Record<
   string,
   { current: number; schemas: Record<number, z.ZodSchema> }
@@ -204,5 +344,13 @@ export const FILE_SCHEMAS: Record<
   'intentions.json': {
     current: 1,
     schemas: { 1: IntentionsFileSchemaV1 },
+  },
+  'energy.json': {
+    current: 2,
+    schemas: { 2: EnergyFileSchemaV2 },
+  },
+  'weekly-reviews.json': {
+    current: 2,
+    schemas: { 2: WeeklyReviewsFileSchemaV2 },
   },
 };

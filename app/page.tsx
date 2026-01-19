@@ -88,6 +88,103 @@ interface Intention {
   missCount: number;
 }
 
+// Energy tracking types
+type MoodType = 'energized' | 'calm' | 'neutral' | 'tired' | 'stressed';
+type BreakActivityType = 'walk' | 'stretch' | 'meditation' | 'snack' | 'social' | 'phone' | 'nap' | 'fresh_air' | 'other';
+
+interface EnergyCheckIn {
+  id: string;
+  date: string;
+  energyLevel: number;
+  mood: MoodType;
+  notes: string | null;
+  createdAt: string;
+}
+
+interface WorkBlock {
+  id: string;
+  date: string;
+  startTime: string;
+  endTime: string | null;
+  plannedDurationMinutes: number;
+  actualDurationMinutes: number | null;
+  taskId: string | null;
+  focusRating: number | null;
+  notes: string | null;
+}
+
+interface BreakLog {
+  id: string;
+  date: string;
+  startTime: string;
+  endTime: string | null;
+  durationMinutes: number | null;
+  activities: BreakActivityType[];
+  restorativeScore: number | null;
+}
+
+interface EnergySuggestion {
+  id: string;
+  type: 'break_reminder' | 'energy_tip' | 'pattern_insight' | 'schedule_adjustment';
+  priority: 'low' | 'medium' | 'high';
+  title: string;
+  description: string;
+  actionable: boolean;
+}
+
+interface EnergyState {
+  checkIn: EnergyCheckIn | null;
+  activeWorkBlock: WorkBlock | null;
+  activeBreak: BreakLog | null;
+  todayWorkBlocks: WorkBlock[];
+  todayBreaks: BreakLog[];
+}
+
+// Weekly Review types
+type ReviewStepType = 'celebrate' | 'challenges' | 'learnings' | 'values' | 'big_three' | 'schedule';
+type TaskCategory = 'research' | 'teaching_service' | 'family' | 'health';
+
+interface BigThreeItem {
+  id: string;
+  title: string;
+  category: TaskCategory;
+  linkedTaskId: string | null;
+  completed: boolean;
+}
+
+interface WeeklyReviewMetrics {
+  tasksCompleted: number;
+  focusBlocksCompleted: number;
+  totalFocusMinutes: number;
+  averageEnergy: number | null;
+  averageFocusRating: number | null;
+  habitsCompletedRate: number | null;
+}
+
+interface WeeklyReview {
+  id: string;
+  weekStart: string;
+  weekEnd: string;
+  wins: string[];
+  progressRating: number | null;
+  challenges: string[];
+  obstacles: string[];
+  learnings: string[];
+  insights: string[];
+  valuesAlignment: number | null;
+  valuesReflection: string | null;
+  bigThree: BigThreeItem[];
+  scheduleConfirmed: boolean;
+  scheduledFocusBlocks: number | null;
+  capacityCheck: number | null;
+  metrics: WeeklyReviewMetrics;
+  status: 'in_progress' | 'completed';
+  currentStep: ReviewStepType;
+  startedAt: string;
+  completedAt: string | null;
+  durationMinutes: number | null;
+}
+
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -126,6 +223,39 @@ const CUE_TYPE_CONFIG = {
   activity: { label: 'Activity', icon: '▶', example: 'After morning coffee' },
   event: { label: 'Event', icon: '📅', example: 'When I finish lunch' },
 } as const;
+
+const MOOD_CONFIG: Record<MoodType, { label: string; icon: string; color: string }> = {
+  energized: { label: 'Energized', icon: '⚡', color: 'text-yellow-400' },
+  calm: { label: 'Calm', icon: '◎', color: 'text-emerald-400' },
+  neutral: { label: 'Neutral', icon: '◉', color: 'text-slate-400' },
+  tired: { label: 'Tired', icon: '◐', color: 'text-blue-400' },
+  stressed: { label: 'Stressed', icon: '◈', color: 'text-rose-400' },
+};
+
+const BREAK_ACTIVITY_CONFIG: Record<BreakActivityType, { label: string; icon: string }> = {
+  walk: { label: 'Walk', icon: '🚶' },
+  stretch: { label: 'Stretch', icon: '🧘' },
+  meditation: { label: 'Meditate', icon: '🧘' },
+  snack: { label: 'Snack', icon: '🍎' },
+  social: { label: 'Social', icon: '💬' },
+  phone: { label: 'Phone', icon: '📱' },
+  nap: { label: 'Nap', icon: '😴' },
+  fresh_air: { label: 'Fresh Air', icon: '🌿' },
+  other: { label: 'Other', icon: '✨' },
+};
+
+const DEFAULT_WORK_BLOCK_DURATION = 90; // Ultradian rhythm: 90-120 minutes
+
+const REVIEW_STEP_CONFIG: Record<ReviewStepType, { title: string; subtitle: string; icon: string }> = {
+  celebrate: { title: 'Celebrate Progress', subtitle: 'What went well this week?', icon: '✦' },
+  challenges: { title: 'Acknowledge Challenges', subtitle: 'What got in the way?', icon: '◇' },
+  learnings: { title: 'Capture Learnings', subtitle: 'What did you learn?', icon: '◈' },
+  values: { title: 'Values Check', subtitle: 'Did your work align with what matters?', icon: '◎' },
+  big_three: { title: 'Plan Big Three', subtitle: 'Your top priorities for next week', icon: '◉' },
+  schedule: { title: 'Confirm Schedule', subtitle: 'Set yourself up for success', icon: '◐' },
+};
+
+const REVIEW_STEP_ORDER: ReviewStepType[] = ['celebrate', 'challenges', 'learnings', 'values', 'big_three', 'schedule'];
 
 function getLocalDateKey(date: Date): string {
   const year = date.getFullYear();
@@ -2091,6 +2221,1098 @@ function ChatToggle({
 }
 
 // ============================================
+// ENERGY CHECK-IN MODAL
+// ============================================
+
+function EnergyCheckInModal({
+  isVisible,
+  onClose,
+  onSubmit,
+  existingCheckIn,
+}: {
+  isVisible: boolean;
+  onClose: () => void;
+  onSubmit: (energyLevel: number, mood: MoodType, notes: string | null) => void;
+  existingCheckIn: EnergyCheckIn | null;
+}) {
+  const [energyLevel, setEnergyLevel] = useState(existingCheckIn?.energyLevel ?? 5);
+  const [mood, setMood] = useState<MoodType>(existingCheckIn?.mood ?? 'neutral');
+  const [notes, setNotes] = useState(existingCheckIn?.notes ?? '');
+
+  useEffect(() => {
+    if (existingCheckIn) {
+      setEnergyLevel(existingCheckIn.energyLevel);
+      setMood(existingCheckIn.mood);
+      setNotes(existingCheckIn.notes ?? '');
+    }
+  }, [existingCheckIn]);
+
+  if (!isVisible) return null;
+
+  const handleSubmit = () => {
+    onSubmit(energyLevel, mood, notes.trim() || null);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-8">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <GlassPanel className="relative w-full max-w-md p-6" glow>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <span className="text-emerald-400 text-sm font-mono">◆</span>
+            <h2 className="text-slate-200 font-semibold tracking-wide">ENERGY CHECK-IN</h2>
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition-colors p-1">
+            ✕
+          </button>
+        </div>
+
+        {/* Energy Level Slider */}
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-slate-400 text-sm">Energy Level</span>
+            <span className="text-cyan-400 text-lg font-mono font-bold">{energyLevel}</span>
+          </div>
+          <input
+            type="range"
+            min="1"
+            max="10"
+            value={energyLevel}
+            onChange={(e) => setEnergyLevel(Number(e.target.value))}
+            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+          />
+          <div className="flex justify-between text-xs text-slate-600 mt-1">
+            <span>Low</span>
+            <span>High</span>
+          </div>
+        </div>
+
+        {/* Mood Selection */}
+        <div className="mb-6">
+          <span className="text-slate-400 text-sm block mb-3">How are you feeling?</span>
+          <div className="grid grid-cols-5 gap-2">
+            {(Object.keys(MOOD_CONFIG) as MoodType[]).map((m) => {
+              const config = MOOD_CONFIG[m];
+              return (
+                <button
+                  key={m}
+                  onClick={() => setMood(m)}
+                  className={`
+                    p-2 rounded-lg border transition-all duration-200
+                    flex flex-col items-center gap-1
+                    ${mood === m
+                      ? 'bg-slate-700/50 border-cyan-500/50'
+                      : 'bg-slate-800/30 border-slate-700/30 hover:border-slate-600/50'}
+                  `}
+                >
+                  <span className={`text-lg ${config.color}`}>{config.icon}</span>
+                  <span className="text-[10px] text-slate-400">{config.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Notes */}
+        <div className="mb-6">
+          <span className="text-slate-400 text-sm block mb-2">Notes (optional)</span>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="How did you sleep? Any observations..."
+            rows={2}
+            className="
+              w-full p-3 rounded-lg
+              bg-slate-800/50 border border-slate-700/50
+              text-slate-200 placeholder-slate-600
+              focus:outline-none focus:border-cyan-500/50
+              resize-none text-sm
+            "
+          />
+        </div>
+
+        <button
+          onClick={handleSubmit}
+          className="
+            w-full py-3 rounded-lg
+            bg-emerald-600 hover:bg-emerald-500
+            text-white font-medium
+            transition-colors
+          "
+        >
+          {existingCheckIn ? 'Update Check-in' : 'Log Check-in'}
+        </button>
+      </GlassPanel>
+    </div>
+  );
+}
+
+// ============================================
+// WORK BLOCK TIMER
+// ============================================
+
+function WorkBlockTimer({
+  activeWorkBlock,
+  currentTime,
+  onEndBlock,
+  onStartBlock,
+  linkedTask,
+}: {
+  activeWorkBlock: WorkBlock | null;
+  currentTime: Date;
+  onEndBlock: (focusRating: number | null) => void;
+  onStartBlock: (durationMinutes: number) => void;
+  linkedTask: Task | null;
+}) {
+  const [showRating, setShowRating] = useState(false);
+  const [focusRating, setFocusRating] = useState<number>(3);
+
+  if (!activeWorkBlock) {
+    return (
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => onStartBlock(DEFAULT_WORK_BLOCK_DURATION)}
+          className="
+            px-4 py-2 rounded-lg
+            bg-cyan-600/20 border border-cyan-500/30
+            text-cyan-400 text-sm font-medium
+            hover:bg-cyan-600/30 hover:border-cyan-500/50
+            transition-all flex items-center gap-2
+          "
+        >
+          <span>▶</span>
+          <span>Start Focus Block</span>
+        </button>
+      </div>
+    );
+  }
+
+  const [startH, startM] = activeWorkBlock.startTime.split(':').map(Number);
+  const elapsedMinutes = Math.floor(
+    (currentTime.getHours() * 60 + currentTime.getMinutes()) - (startH * 60 + startM)
+  );
+  const plannedMinutes = activeWorkBlock.plannedDurationMinutes;
+  const remainingMinutes = plannedMinutes - elapsedMinutes;
+  const progress = Math.min(100, (elapsedMinutes / plannedMinutes) * 100);
+  const isOvertime = elapsedMinutes > plannedMinutes;
+
+  const formatTime = (minutes: number) => {
+    const h = Math.floor(Math.abs(minutes) / 60);
+    const m = Math.abs(minutes) % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+
+  if (showRating) {
+    return (
+      <GlassPanel className="p-4" glow>
+        <div className="text-center mb-4">
+          <span className="text-slate-400 text-sm">Rate your focus</span>
+        </div>
+        <div className="flex justify-center gap-2 mb-4">
+          {[1, 2, 3, 4, 5].map((rating) => (
+            <button
+              key={rating}
+              onClick={() => setFocusRating(rating)}
+              className={`
+                w-10 h-10 rounded-lg border transition-all
+                ${focusRating === rating
+                  ? 'bg-cyan-600/30 border-cyan-500/50 text-cyan-400'
+                  : 'bg-slate-800/30 border-slate-700/30 text-slate-400 hover:border-slate-600/50'}
+              `}
+            >
+              {rating}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => {
+              onEndBlock(focusRating);
+              setShowRating(false);
+            }}
+            className="
+              flex-1 py-2 rounded-lg
+              bg-emerald-600 hover:bg-emerald-500
+              text-white text-sm font-medium
+              transition-colors
+            "
+          >
+            End Block
+          </button>
+          <button
+            onClick={() => setShowRating(false)}
+            className="
+              px-4 py-2 rounded-lg
+              bg-slate-700 hover:bg-slate-600
+              text-slate-300 text-sm
+              transition-colors
+            "
+          >
+            Cancel
+          </button>
+        </div>
+      </GlassPanel>
+    );
+  }
+
+  return (
+    <GlassPanel className="p-4" glow>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className={`w-2 h-2 rounded-full animate-pulse ${isOvertime ? 'bg-amber-400' : 'bg-cyan-400'}`} />
+          <span className="text-xs text-slate-400 font-mono uppercase tracking-wider">
+            Focus Block Active
+          </span>
+        </div>
+        <span className="text-xs text-slate-500 font-mono">
+          Started {activeWorkBlock.startTime}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="h-2 bg-slate-800 rounded-full overflow-hidden mb-3">
+        <div
+          className={`h-full transition-all duration-1000 ${isOvertime ? 'bg-amber-500' : 'bg-cyan-500'}`}
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+
+      <div className="flex items-center justify-between mb-3">
+        <span className={`text-2xl font-mono font-bold ${isOvertime ? 'text-amber-400' : 'text-cyan-400'}`}>
+          {formatTime(elapsedMinutes)}
+        </span>
+        <span className="text-slate-500 text-sm">
+          {isOvertime ? `+${formatTime(Math.abs(remainingMinutes))} over` : `${formatTime(remainingMinutes)} left`}
+        </span>
+      </div>
+
+      {linkedTask && (
+        <p className="text-slate-400 text-sm mb-3 truncate">
+          → {linkedTask.title}
+        </p>
+      )}
+
+      <div className="flex gap-2">
+        <button
+          onClick={() => setShowRating(true)}
+          className="
+            flex-1 py-2 rounded-lg
+            bg-slate-700/50 border border-slate-600/30
+            text-slate-300 text-sm
+            hover:bg-slate-700 hover:border-slate-500/50
+            transition-all
+          "
+        >
+          End Block
+        </button>
+      </div>
+
+      {isOvertime && (
+        <p className="text-amber-400 text-xs mt-3 text-center">
+          Consider taking a break for optimal recovery
+        </p>
+      )}
+    </GlassPanel>
+  );
+}
+
+// ============================================
+// BREAK QUALITY MODAL
+// ============================================
+
+function BreakQualityModal({
+  isVisible,
+  onClose,
+  onSubmit,
+  activeBreak,
+}: {
+  isVisible: boolean;
+  onClose: () => void;
+  onSubmit: (activities: BreakActivityType[], restorativeScore: number | null) => void;
+  activeBreak: BreakLog | null;
+}) {
+  const [selectedActivities, setSelectedActivities] = useState<Set<BreakActivityType>>(
+    new Set(activeBreak?.activities ?? [])
+  );
+  const [restorativeScore, setRestorativeScore] = useState<number | null>(null);
+
+  if (!isVisible) return null;
+
+  const toggleActivity = (activity: BreakActivityType) => {
+    const newSet = new Set(selectedActivities);
+    if (newSet.has(activity)) {
+      newSet.delete(activity);
+    } else {
+      newSet.add(activity);
+    }
+    setSelectedActivities(newSet);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-8">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <GlassPanel className="relative w-full max-w-md p-6" glow>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <span className="text-emerald-400 text-sm font-mono">◇</span>
+            <h2 className="text-slate-200 font-semibold tracking-wide">BREAK QUALITY</h2>
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition-colors p-1">
+            ✕
+          </button>
+        </div>
+
+        {/* Activities */}
+        <div className="mb-6">
+          <span className="text-slate-400 text-sm block mb-3">What did you do?</span>
+          <div className="grid grid-cols-3 gap-2">
+            {(Object.keys(BREAK_ACTIVITY_CONFIG) as BreakActivityType[]).map((activity) => {
+              const config = BREAK_ACTIVITY_CONFIG[activity];
+              const isSelected = selectedActivities.has(activity);
+              return (
+                <button
+                  key={activity}
+                  onClick={() => toggleActivity(activity)}
+                  className={`
+                    p-2 rounded-lg border transition-all duration-200
+                    flex flex-col items-center gap-1
+                    ${isSelected
+                      ? 'bg-emerald-600/20 border-emerald-500/50'
+                      : 'bg-slate-800/30 border-slate-700/30 hover:border-slate-600/50'}
+                  `}
+                >
+                  <span className="text-lg">{config.icon}</span>
+                  <span className="text-[10px] text-slate-400">{config.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Restorative Score */}
+        <div className="mb-6">
+          <span className="text-slate-400 text-sm block mb-3">How refreshed do you feel?</span>
+          <div className="flex justify-center gap-2">
+            {[1, 2, 3, 4, 5].map((score) => (
+              <button
+                key={score}
+                onClick={() => setRestorativeScore(score)}
+                className={`
+                  w-12 h-12 rounded-lg border transition-all
+                  flex items-center justify-center
+                  ${restorativeScore === score
+                    ? 'bg-emerald-600/30 border-emerald-500/50 text-emerald-400'
+                    : 'bg-slate-800/30 border-slate-700/30 text-slate-400 hover:border-slate-600/50'}
+                `}
+              >
+                <span className="font-mono font-bold">{score}</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex justify-between text-xs text-slate-600 mt-2 px-2">
+            <span>Drained</span>
+            <span>Refreshed</span>
+          </div>
+        </div>
+
+        <button
+          onClick={() => {
+            onSubmit(Array.from(selectedActivities), restorativeScore);
+            onClose();
+          }}
+          className="
+            w-full py-3 rounded-lg
+            bg-emerald-600 hover:bg-emerald-500
+            text-white font-medium
+            transition-colors
+          "
+        >
+          End Break
+        </button>
+      </GlassPanel>
+    </div>
+  );
+}
+
+// ============================================
+// ENERGY DASHBOARD DRAWER
+// ============================================
+
+function EnergyDashboardDrawer({
+  isOpen,
+  onToggle,
+  energyState,
+  suggestions,
+  currentTime,
+  onOpenCheckIn,
+  onStartWorkBlock,
+  onEndWorkBlock,
+  onStartBreak,
+  onEndBreak,
+  focusTask,
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+  energyState: EnergyState | null;
+  suggestions: EnergySuggestion[];
+  currentTime: Date;
+  onOpenCheckIn: () => void;
+  onStartWorkBlock: (duration: number) => void;
+  onEndWorkBlock: (focusRating: number | null) => void;
+  onStartBreak: () => void;
+  onEndBreak: () => void;
+  focusTask: Task | null;
+}) {
+  const hasCheckIn = !!energyState?.checkIn;
+  const todayFocusMinutes = energyState?.todayWorkBlocks
+    .filter(b => b.endTime !== null)
+    .reduce((sum, b) => sum + (b.actualDurationMinutes ?? 0), 0) ?? 0;
+  const todayBreakCount = energyState?.todayBreaks.length ?? 0;
+
+  return (
+    <>
+      {/* Toggle Button - top center */}
+      <button
+        onClick={onToggle}
+        className={`
+          fixed top-4 left-1/2 -translate-x-1/2 z-50
+          px-4 py-2
+          bg-slate-900/80 backdrop-blur-md
+          border border-slate-700/50
+          rounded-b-lg
+          flex items-center justify-center gap-2
+          transition-all duration-300
+          hover:bg-slate-800/80 hover:border-emerald-500/30
+          group
+          ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
+        `}
+        style={{ WebkitBackdropFilter: 'blur(12px)' }}
+        aria-label="Open energy tracker"
+      >
+        {!hasCheckIn && (
+          <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+        )}
+        <span className="text-slate-400 group-hover:text-emerald-400 transition-colors text-xs font-mono uppercase tracking-wider">
+          Energy
+        </span>
+        {hasCheckIn && energyState?.checkIn && (
+          <span className={`${MOOD_CONFIG[energyState.checkIn.mood].color} text-sm`}>
+            {energyState.checkIn.energyLevel}
+          </span>
+        )}
+      </button>
+
+      {/* Drawer Panel */}
+      <div
+        className={`
+          fixed top-0 left-1/2 -translate-x-1/2 z-40
+          w-full max-w-lg
+          transition-transform duration-500 ease-out
+          ${isOpen ? 'translate-y-0' : '-translate-y-full'}
+        `}
+      >
+        <GlassPanel className="rounded-t-none p-4" glow>
+          {/* Header */}
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <span className="text-emerald-400 text-sm font-mono">◆</span>
+              <h2 className="text-slate-200 font-semibold tracking-wide">ENERGY TRACKER</h2>
+            </div>
+            <button
+              onClick={onToggle}
+              className="text-slate-500 hover:text-slate-300 transition-colors p-1"
+              aria-label="Close energy tracker"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Quick Stats */}
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="bg-slate-800/30 rounded-lg p-3 text-center">
+              <p className="text-slate-500 text-[10px] font-mono uppercase tracking-wider mb-1">Energy</p>
+              {hasCheckIn ? (
+                <p className={`text-xl font-mono font-bold ${MOOD_CONFIG[energyState!.checkIn!.mood].color}`}>
+                  {energyState!.checkIn!.energyLevel}
+                </p>
+              ) : (
+                <button
+                  onClick={onOpenCheckIn}
+                  className="text-emerald-400 text-xs hover:text-emerald-300 transition-colors"
+                >
+                  Check in
+                </button>
+              )}
+            </div>
+            <div className="bg-slate-800/30 rounded-lg p-3 text-center">
+              <p className="text-slate-500 text-[10px] font-mono uppercase tracking-wider mb-1">Focus</p>
+              <p className="text-xl font-mono font-bold text-cyan-400">
+                {Math.round(todayFocusMinutes / 60 * 10) / 10}h
+              </p>
+            </div>
+            <div className="bg-slate-800/30 rounded-lg p-3 text-center">
+              <p className="text-slate-500 text-[10px] font-mono uppercase tracking-wider mb-1">Breaks</p>
+              <p className="text-xl font-mono font-bold text-amber-400">{todayBreakCount}</p>
+            </div>
+          </div>
+
+          {/* Work Block Timer */}
+          {energyState && (
+            <div className="mb-4">
+              <WorkBlockTimer
+                activeWorkBlock={energyState.activeWorkBlock}
+                currentTime={currentTime}
+                onEndBlock={onEndWorkBlock}
+                onStartBlock={onStartWorkBlock}
+                linkedTask={focusTask}
+              />
+            </div>
+          )}
+
+          {/* Active Break */}
+          {energyState?.activeBreak && (
+            <div className="mb-4 p-3 rounded-lg bg-emerald-600/10 border border-emerald-500/30">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                  <span className="text-emerald-400 text-sm">Break in progress</span>
+                </div>
+                <button
+                  onClick={onEndBreak}
+                  className="text-emerald-400 text-sm hover:text-emerald-300 transition-colors"
+                >
+                  End Break
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Quick Actions */}
+          {!energyState?.activeWorkBlock && !energyState?.activeBreak && (
+            <div className="flex gap-2 mb-4">
+              <button
+                onClick={() => onStartWorkBlock(DEFAULT_WORK_BLOCK_DURATION)}
+                className="
+                  flex-1 py-2 rounded-lg
+                  bg-cyan-600/20 border border-cyan-500/30
+                  text-cyan-400 text-sm
+                  hover:bg-cyan-600/30 hover:border-cyan-500/50
+                  transition-all
+                "
+              >
+                Start Focus
+              </button>
+              <button
+                onClick={onStartBreak}
+                className="
+                  flex-1 py-2 rounded-lg
+                  bg-emerald-600/20 border border-emerald-500/30
+                  text-emerald-400 text-sm
+                  hover:bg-emerald-600/30 hover:border-emerald-500/50
+                  transition-all
+                "
+              >
+                Take Break
+              </button>
+              {!hasCheckIn && (
+                <button
+                  onClick={onOpenCheckIn}
+                  className="
+                    flex-1 py-2 rounded-lg
+                    bg-amber-600/20 border border-amber-500/30
+                    text-amber-400 text-sm
+                    hover:bg-amber-600/30 hover:border-amber-500/50
+                    transition-all
+                  "
+                >
+                  Check In
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* AI Suggestions */}
+          {suggestions.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-slate-500 text-[10px] font-mono uppercase tracking-wider">Suggestions</p>
+              {suggestions.slice(0, 2).map((suggestion) => (
+                <div
+                  key={suggestion.id}
+                  className={`
+                    p-3 rounded-lg border
+                    ${suggestion.priority === 'high'
+                      ? 'bg-amber-500/10 border-amber-500/30'
+                      : suggestion.priority === 'medium'
+                        ? 'bg-cyan-500/10 border-cyan-500/30'
+                        : 'bg-slate-800/30 border-slate-700/30'}
+                  `}
+                >
+                  <p className={`text-sm font-medium ${
+                    suggestion.priority === 'high' ? 'text-amber-400' :
+                    suggestion.priority === 'medium' ? 'text-cyan-400' : 'text-slate-300'
+                  }`}>
+                    {suggestion.title}
+                  </p>
+                  <p className="text-slate-400 text-xs mt-1">{suggestion.description}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </GlassPanel>
+      </div>
+
+      {/* Backdrop overlay when drawer is open */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 bg-black/[0.06] z-30"
+          onClick={onToggle}
+        />
+      )}
+    </>
+  );
+}
+
+// ============================================
+// WEEKLY REVIEW WIZARD
+// ============================================
+
+function WeeklyReviewWizard({
+  isVisible,
+  onClose,
+  review,
+  onUpdateStep,
+  onNavigate,
+  onComplete,
+  onAddBigThree,
+  tasks,
+}: {
+  isVisible: boolean;
+  onClose: () => void;
+  review: WeeklyReview;
+  onUpdateStep: (step: ReviewStepType, data: Partial<WeeklyReview>) => void;
+  onNavigate: (direction: 'next' | 'back') => void;
+  onComplete: () => void;
+  onAddBigThree: (title: string, category: TaskCategory) => void;
+  tasks: Task[];
+}) {
+  const [inputValue, setInputValue] = useState('');
+  const [bigThreeTitle, setBigThreeTitle] = useState('');
+  const [bigThreeCategory, setBigThreeCategory] = useState<TaskCategory>('research');
+
+  const currentStepIndex = REVIEW_STEP_ORDER.indexOf(review.currentStep);
+  const isFirstStep = currentStepIndex === 0;
+  const isLastStep = currentStepIndex === REVIEW_STEP_ORDER.length - 1;
+  const stepConfig = REVIEW_STEP_CONFIG[review.currentStep];
+
+  if (!isVisible) return null;
+
+  const addListItem = (field: 'wins' | 'challenges' | 'obstacles' | 'learnings' | 'insights') => {
+    if (!inputValue.trim()) return;
+    const currentList = review[field] || [];
+    onUpdateStep(review.currentStep, { [field]: [...currentList, inputValue.trim()] });
+    setInputValue('');
+  };
+
+  const removeListItem = (field: 'wins' | 'challenges' | 'obstacles' | 'learnings' | 'insights', index: number) => {
+    const currentList = review[field] || [];
+    onUpdateStep(review.currentStep, { [field]: currentList.filter((_, i) => i !== index) });
+  };
+
+  const handleAddBigThree = () => {
+    if (!bigThreeTitle.trim() || review.bigThree.length >= 3) return;
+    onAddBigThree(bigThreeTitle.trim(), bigThreeCategory);
+    setBigThreeTitle('');
+  };
+
+  const renderStepContent = () => {
+    switch (review.currentStep) {
+      case 'celebrate':
+        return (
+          <div className="space-y-4">
+            {/* Metrics Summary */}
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              <div className="bg-slate-800/30 rounded-lg p-3 text-center">
+                <p className="text-slate-500 text-[10px] font-mono uppercase">Tasks Done</p>
+                <p className="text-xl font-mono font-bold text-cyan-400">{review.metrics.tasksCompleted}</p>
+              </div>
+              <div className="bg-slate-800/30 rounded-lg p-3 text-center">
+                <p className="text-slate-500 text-[10px] font-mono uppercase">Focus Time</p>
+                <p className="text-xl font-mono font-bold text-emerald-400">
+                  {Math.round(review.metrics.totalFocusMinutes / 60)}h
+                </p>
+              </div>
+              <div className="bg-slate-800/30 rounded-lg p-3 text-center">
+                <p className="text-slate-500 text-[10px] font-mono uppercase">Avg Energy</p>
+                <p className="text-xl font-mono font-bold text-amber-400">
+                  {review.metrics.averageEnergy?.toFixed(1) ?? '-'}
+                </p>
+              </div>
+            </div>
+
+            {/* Wins List */}
+            <div>
+              <label className="text-slate-400 text-sm block mb-2">What were your wins this week?</label>
+              <div className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addListItem('wins')}
+                  placeholder="Add a win..."
+                  className="flex-1 p-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 text-sm"
+                />
+                <button
+                  onClick={() => addListItem('wins')}
+                  className="px-3 py-2 rounded-lg bg-cyan-600/20 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-600/30 transition-colors"
+                >
+                  +
+                </button>
+              </div>
+              <div className="space-y-1 max-h-32 overflow-y-auto">
+                {review.wins.map((win, i) => (
+                  <div key={i} className="flex items-center gap-2 p-2 rounded bg-slate-800/30">
+                    <span className="text-emerald-400">✓</span>
+                    <span className="flex-1 text-sm text-slate-300">{win}</span>
+                    <button onClick={() => removeListItem('wins', i)} className="text-slate-500 hover:text-slate-300 text-xs">✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Progress Rating */}
+            <div>
+              <label className="text-slate-400 text-sm block mb-2">How satisfied are you with this week?</label>
+              <div className="flex justify-center gap-2">
+                {[1, 2, 3, 4, 5].map((rating) => (
+                  <button
+                    key={rating}
+                    onClick={() => onUpdateStep('celebrate', { progressRating: rating })}
+                    className={`w-12 h-12 rounded-lg border transition-all ${
+                      review.progressRating === rating
+                        ? 'bg-cyan-600/30 border-cyan-500/50 text-cyan-400'
+                        : 'bg-slate-800/30 border-slate-700/30 text-slate-400 hover:border-slate-600/50'
+                    }`}
+                  >
+                    {rating}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'challenges':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-slate-400 text-sm block mb-2">What challenges did you face?</label>
+              <div className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addListItem('challenges')}
+                  placeholder="Add a challenge..."
+                  className="flex-1 p-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 text-sm"
+                />
+                <button onClick={() => addListItem('challenges')} className="px-3 py-2 rounded-lg bg-amber-600/20 border border-amber-500/30 text-amber-400 hover:bg-amber-600/30 transition-colors">+</button>
+              </div>
+              <div className="space-y-1 max-h-24 overflow-y-auto">
+                {review.challenges.map((item, i) => (
+                  <div key={i} className="flex items-center gap-2 p-2 rounded bg-slate-800/30">
+                    <span className="text-amber-400">◇</span>
+                    <span className="flex-1 text-sm text-slate-300">{item}</span>
+                    <button onClick={() => removeListItem('challenges', i)} className="text-slate-500 hover:text-slate-300 text-xs">✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-slate-400 text-sm block mb-2">What obstacles got in your way?</label>
+              <div className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addListItem('obstacles')}
+                  placeholder="Add an obstacle..."
+                  className="flex-1 p-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 text-sm"
+                />
+                <button onClick={() => addListItem('obstacles')} className="px-3 py-2 rounded-lg bg-rose-600/20 border border-rose-500/30 text-rose-400 hover:bg-rose-600/30 transition-colors">+</button>
+              </div>
+              <div className="space-y-1 max-h-24 overflow-y-auto">
+                {review.obstacles.map((item, i) => (
+                  <div key={i} className="flex items-center gap-2 p-2 rounded bg-slate-800/30">
+                    <span className="text-rose-400">◈</span>
+                    <span className="flex-1 text-sm text-slate-300">{item}</span>
+                    <button onClick={() => removeListItem('obstacles', i)} className="text-slate-500 hover:text-slate-300 text-xs">✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'learnings':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-slate-400 text-sm block mb-2">What did you learn this week?</label>
+              <div className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addListItem('learnings')}
+                  placeholder="Add a learning..."
+                  className="flex-1 p-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 text-sm"
+                />
+                <button onClick={() => addListItem('learnings')} className="px-3 py-2 rounded-lg bg-cyan-600/20 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-600/30 transition-colors">+</button>
+              </div>
+              <div className="space-y-1 max-h-24 overflow-y-auto">
+                {review.learnings.map((item, i) => (
+                  <div key={i} className="flex items-center gap-2 p-2 rounded bg-slate-800/30">
+                    <span className="text-cyan-400">◎</span>
+                    <span className="flex-1 text-sm text-slate-300">{item}</span>
+                    <button onClick={() => removeListItem('learnings', i)} className="text-slate-500 hover:text-slate-300 text-xs">✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-slate-400 text-sm block mb-2">Any key insights or realizations?</label>
+              <div className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addListItem('insights')}
+                  placeholder="Add an insight..."
+                  className="flex-1 p-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 text-sm"
+                />
+                <button onClick={() => addListItem('insights')} className="px-3 py-2 rounded-lg bg-emerald-600/20 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-600/30 transition-colors">+</button>
+              </div>
+              <div className="space-y-1 max-h-24 overflow-y-auto">
+                {review.insights.map((item, i) => (
+                  <div key={i} className="flex items-center gap-2 p-2 rounded bg-slate-800/30">
+                    <span className="text-emerald-400">✦</span>
+                    <span className="flex-1 text-sm text-slate-300">{item}</span>
+                    <button onClick={() => removeListItem('insights', i)} className="text-slate-500 hover:text-slate-300 text-xs">✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'values':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-slate-400 text-sm block mb-2">How aligned was your work with your values?</label>
+              <div className="flex justify-center gap-2 mb-4">
+                {[1, 2, 3, 4, 5].map((rating) => (
+                  <button
+                    key={rating}
+                    onClick={() => onUpdateStep('values', { valuesAlignment: rating })}
+                    className={`w-12 h-12 rounded-lg border transition-all ${
+                      review.valuesAlignment === rating
+                        ? 'bg-emerald-600/30 border-emerald-500/50 text-emerald-400'
+                        : 'bg-slate-800/30 border-slate-700/30 text-slate-400 hover:border-slate-600/50'
+                    }`}
+                  >
+                    {rating}
+                  </button>
+                ))}
+              </div>
+              <div className="flex justify-between text-xs text-slate-600 px-2">
+                <span>Not aligned</span>
+                <span>Highly aligned</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-slate-400 text-sm block mb-2">Reflection (optional)</label>
+              <textarea
+                value={review.valuesReflection ?? ''}
+                onChange={(e) => onUpdateStep('values', { valuesReflection: e.target.value || null })}
+                placeholder="What would make next week feel more meaningful?"
+                rows={3}
+                className="w-full p-3 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 resize-none text-sm"
+              />
+            </div>
+          </div>
+        );
+
+      case 'big_three':
+        return (
+          <div className="space-y-4">
+            <p className="text-slate-400 text-sm">Choose your top 3 priorities for next week. Focus on outcomes, not tasks.</p>
+
+            {/* Current Big Three */}
+            <div className="space-y-2">
+              {review.bigThree.map((item, i) => (
+                <div key={item.id} className="flex items-center gap-3 p-3 rounded-lg bg-slate-800/30 border border-slate-700/30">
+                  <span className="text-cyan-400 font-mono font-bold">{i + 1}</span>
+                  <div className="flex-1">
+                    <p className="text-slate-200 text-sm">{item.title}</p>
+                    <p className="text-slate-500 text-xs">{CATEGORY_CONFIG[item.category].label}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Add New Big Three */}
+            {review.bigThree.length < 3 && (
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  value={bigThreeTitle}
+                  onChange={(e) => setBigThreeTitle(e.target.value)}
+                  placeholder="Add a priority outcome..."
+                  className="w-full p-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 text-sm"
+                />
+                <div className="flex gap-2">
+                  <select
+                    value={bigThreeCategory}
+                    onChange={(e) => setBigThreeCategory(e.target.value as TaskCategory)}
+                    className="flex-1 p-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-200 focus:outline-none focus:border-cyan-500/50 text-sm"
+                  >
+                    {(Object.keys(CATEGORY_CONFIG) as TaskCategory[]).map((cat) => (
+                      <option key={cat} value={cat}>{CATEGORY_CONFIG[cat].label}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={handleAddBigThree}
+                    disabled={!bigThreeTitle.trim()}
+                    className="px-4 py-2 rounded-lg bg-cyan-600/20 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-600/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+
+      case 'schedule':
+        return (
+          <div className="space-y-4">
+            <div className="bg-slate-800/30 rounded-lg p-4">
+              <p className="text-slate-300 text-sm mb-3">
+                Research suggests scheduling 60-70% of your time for optimal productivity. Leave buffer for unexpected tasks.
+              </p>
+
+              <div>
+                <label className="text-slate-400 text-sm block mb-2">Planned focus blocks for next week</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="35"
+                  value={review.scheduledFocusBlocks ?? ''}
+                  onChange={(e) => onUpdateStep('schedule', { scheduledFocusBlocks: e.target.value ? parseInt(e.target.value) : null })}
+                  placeholder="e.g., 15"
+                  className="w-full p-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 text-sm"
+                />
+                <p className="text-slate-500 text-xs mt-1">
+                  {review.scheduledFocusBlocks
+                    ? `~${Math.round((review.scheduledFocusBlocks * 90) / 60)} hours of focus time`
+                    : 'Each block is ~90 minutes'}
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={review.scheduleConfirmed}
+                  onChange={(e) => onUpdateStep('schedule', { scheduleConfirmed: e.target.checked })}
+                  className="w-5 h-5 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+                />
+                <span className="text-slate-300 text-sm">I've reviewed my calendar and confirmed my availability</span>
+              </label>
+            </div>
+          </div>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <GlassPanel className="relative w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col" glow>
+        {/* Header */}
+        <div className="p-4 border-b border-slate-700/50">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-cyan-400 text-lg">{stepConfig.icon}</span>
+              <h2 className="text-slate-200 font-semibold">{stepConfig.title}</h2>
+            </div>
+            <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition-colors p-1">✕</button>
+          </div>
+          <p className="text-slate-400 text-sm">{stepConfig.subtitle}</p>
+
+          {/* Progress indicator */}
+          <div className="flex gap-1 mt-3">
+            {REVIEW_STEP_ORDER.map((step, i) => (
+              <div
+                key={step}
+                className={`flex-1 h-1 rounded-full transition-colors ${
+                  i <= currentStepIndex ? 'bg-cyan-500' : 'bg-slate-700'
+                }`}
+              />
+            ))}
+          </div>
+          <p className="text-slate-500 text-xs mt-1 text-center">
+            Step {currentStepIndex + 1} of {REVIEW_STEP_ORDER.length}
+          </p>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-4">
+          {renderStepContent()}
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-slate-700/50 flex gap-2">
+          {!isFirstStep && (
+            <button
+              onClick={() => onNavigate('back')}
+              className="px-4 py-2 rounded-lg bg-slate-700/50 border border-slate-600/30 text-slate-300 text-sm hover:bg-slate-700 transition-colors"
+            >
+              Back
+            </button>
+          )}
+          <div className="flex-1" />
+          {isLastStep ? (
+            <button
+              onClick={onComplete}
+              className="px-6 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition-colors"
+            >
+              Complete Review
+            </button>
+          ) : (
+            <button
+              onClick={() => onNavigate('next')}
+              className="px-6 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium transition-colors"
+            >
+              Continue
+            </button>
+          )}
+        </div>
+      </GlassPanel>
+    </div>
+  );
+}
+
+// ============================================
 // MAIN PAGE COMPONENT
 // ============================================
 
@@ -2123,6 +3345,18 @@ export default function ProfFlowPage() {
   const [pendingOperations, setPendingOperations] = useState<ProposedOperation[] | null>(null);
   const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
 
+  // Energy tracking state
+  const [energyState, setEnergyState] = useState<EnergyState | null>(null);
+  const [energySuggestions, setEnergySuggestions] = useState<EnergySuggestion[]>([]);
+  const [energyDrawerOpen, setEnergyDrawerOpen] = useState(false);
+  const [checkInModalOpen, setCheckInModalOpen] = useState(false);
+  const [breakQualityModalOpen, setBreakQualityModalOpen] = useState(false);
+
+  // Weekly review state
+  const [weeklyReview, setWeeklyReview] = useState<WeeklyReview | null>(null);
+  const [reviewWizardOpen, setReviewWizardOpen] = useState(false);
+  const [isReviewDue, setIsReviewDue] = useState(false);
+
   const todayDate = getDateAtLocalMidnight(currentTime);
   const scheduleViewDate = addDaysLocal(todayDate, scheduleOffset);
   const scheduleViewDateKey = getLocalDateKey(scheduleViewDate);
@@ -2140,6 +3374,19 @@ export default function ProfFlowPage() {
     fetchTasks();
     fetchPlan();
     fetchIntentions();
+
+    fetchEnergyState();
+    fetchEnergySuggestions();
+    fetchWeeklyReviewStatus();
+  }, []);
+
+  // Refresh energy data every minute
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchEnergyState();
+      fetchEnergySuggestions();
+    }, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   // Load plan for the schedule viewer day (separate from today's plan used for focus).
@@ -2374,6 +3621,40 @@ export default function ProfFlowPage() {
     await handleUpdateIntention(id, { isActive: active });
   }, [handleUpdateIntention]);
 
+  const fetchEnergyState = async () => {
+    try {
+      const res = await fetch('/api/energy/state');
+      if (!res.ok) throw new Error('Failed to fetch energy state');
+      const data = await res.json();
+      setEnergyState(data);
+    } catch (err) {
+      console.error('Failed to fetch energy state:', err);
+    }
+  };
+
+  const fetchEnergySuggestions = async () => {
+    try {
+      const res = await fetch('/api/energy/suggestions');
+      if (!res.ok) throw new Error('Failed to fetch suggestions');
+      const data = await res.json();
+      setEnergySuggestions(data.suggestions || []);
+    } catch (err) {
+      console.error('Failed to fetch energy suggestions:', err);
+    }
+  };
+
+  const fetchWeeklyReviewStatus = async () => {
+    try {
+      const res = await fetch('/api/review');
+      if (!res.ok) throw new Error('Failed to fetch review status');
+      const data = await res.json();
+      setWeeklyReview(data.review || null);
+      setIsReviewDue(data.isDue || false);
+    } catch (err) {
+      console.error('Failed to fetch weekly review status:', err);
+    }
+  };
+
   const handleSetTaskCompleted = useCallback(async (task: Task, completed: boolean) => {
     setTasks((prev) =>
       prev.map((existing) => {
@@ -2593,10 +3874,187 @@ export default function ProfFlowPage() {
     await handleSetTaskCompleted(focusTask, true);
   }, [focusTask, handleSetTaskCompleted]);
 
+  // Energy tracking handlers
+  const handleEnergyCheckIn = useCallback(async (energyLevel: number, mood: MoodType, notes: string | null) => {
+    try {
+      const res = await fetch('/api/energy/checkin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ energyLevel, mood, notes }),
+      });
+      if (!res.ok) throw new Error('Failed to save check-in');
+      await fetchEnergyState();
+      await fetchEnergySuggestions();
+    } catch (err) {
+      console.error('Failed to save energy check-in:', err);
+    }
+  }, []);
+
+  const handleStartWorkBlock = useCallback(async (durationMinutes: number) => {
+    try {
+      const res = await fetch('/api/energy/workblock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plannedDurationMinutes: durationMinutes,
+          taskId: focusTask?.id ?? null,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to start work block');
+      await fetchEnergyState();
+      await fetchEnergySuggestions();
+    } catch (err) {
+      console.error('Failed to start work block:', err);
+    }
+  }, [focusTask]);
+
+  const handleEndWorkBlock = useCallback(async (focusRating: number | null) => {
+    if (!energyState?.activeWorkBlock) return;
+    try {
+      const res = await fetch('/api/energy/workblock', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: energyState.activeWorkBlock.id,
+          focusRating,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to end work block');
+      await fetchEnergyState();
+      await fetchEnergySuggestions();
+    } catch (err) {
+      console.error('Failed to end work block:', err);
+    }
+  }, [energyState?.activeWorkBlock]);
+
+  const handleStartBreak = useCallback(async () => {
+    try {
+      const res = await fetch('/api/energy/break', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) throw new Error('Failed to start break');
+      await fetchEnergyState();
+      await fetchEnergySuggestions();
+    } catch (err) {
+      console.error('Failed to start break:', err);
+    }
+  }, []);
+
+  const handleEndBreak = useCallback(async (activities?: BreakActivityType[], restorativeScore?: number | null) => {
+    if (!energyState?.activeBreak) return;
+    try {
+      const res = await fetch('/api/energy/break', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: energyState.activeBreak.id,
+          activities,
+          restorativeScore,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to end break');
+      await fetchEnergyState();
+      await fetchEnergySuggestions();
+    } catch (err) {
+      console.error('Failed to end break:', err);
+    }
+  }, [energyState?.activeBreak]);
+
+  const handleOpenBreakQualityModal = useCallback(() => {
+    setBreakQualityModalOpen(true);
+  }, []);
+
+  // Weekly review handlers
+  const handleStartWeeklyReview = useCallback(async () => {
+    try {
+      const res = await fetch('/api/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) throw new Error('Failed to start review');
+      const data = await res.json();
+      setWeeklyReview(data.review);
+      setReviewWizardOpen(true);
+    } catch (err) {
+      console.error('Failed to start weekly review:', err);
+    }
+  }, []);
+
+  const handleUpdateReviewStep = useCallback(async (step: ReviewStepType, stepData: Partial<WeeklyReview>) => {
+    if (!weeklyReview) return;
+    try {
+      const res = await fetch('/api/review/update', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: weeklyReview.id, step, ...stepData }),
+      });
+      if (!res.ok) throw new Error('Failed to update review step');
+      const data = await res.json();
+      setWeeklyReview(data.review);
+    } catch (err) {
+      console.error('Failed to update review step:', err);
+    }
+  }, [weeklyReview]);
+
+  const handleNavigateReview = useCallback(async (direction: 'next' | 'back') => {
+    if (!weeklyReview) return;
+    try {
+      const res = await fetch('/api/review/navigate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: weeklyReview.id, direction }),
+      });
+      if (!res.ok) throw new Error('Failed to navigate review');
+      const data = await res.json();
+      setWeeklyReview(data.review);
+    } catch (err) {
+      console.error('Failed to navigate review:', err);
+    }
+  }, [weeklyReview]);
+
+  const handleCompleteReview = useCallback(async () => {
+    if (!weeklyReview) return;
+    try {
+      const res = await fetch('/api/review/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: weeklyReview.id }),
+      });
+      if (!res.ok) throw new Error('Failed to complete review');
+      const data = await res.json();
+      setWeeklyReview(data.review);
+      setReviewWizardOpen(false);
+      setIsReviewDue(false);
+    } catch (err) {
+      console.error('Failed to complete review:', err);
+    }
+  }, [weeklyReview]);
+
+  const handleAddBigThree = useCallback(async (title: string, category: TaskCategory) => {
+    if (!weeklyReview) return;
+    try {
+      const res = await fetch('/api/review/big-three', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewId: weeklyReview.id, title, category }),
+      });
+      if (!res.ok) throw new Error('Failed to add Big Three item');
+      const data = await res.json();
+      setWeeklyReview(data.review);
+    } catch (err) {
+      console.error('Failed to add Big Three item:', err);
+    }
+  }, [weeklyReview]);
+
   return (
     <div className="min-h-screen h-screen overflow-hidden bg-slate-950 text-slate-100">
       {/* Background */}
       <AmbientBackground dim={taskDrawerOpen || scheduleDrawerOpen || focusDrawerOpen || intentionsDrawerOpen} />
+
+      <AmbientBackground dim={taskDrawerOpen || scheduleDrawerOpen || focusDrawerOpen || energyDrawerOpen} />
 
       {/* Task Drawer (Left - slides in) */}
       <TaskDrawer
@@ -2686,16 +4144,100 @@ export default function ProfFlowPage() {
 
       {/* Chat Toggle Button (Floating) */}
       {!chatVisible && (
-        <ChatToggle 
-          onClick={() => setChatVisible(true)} 
+        <ChatToggle
+          onClick={() => setChatVisible(true)}
           hasUnread={pendingOperations !== null}
           rightOffsetClass={scheduleDrawerOpen ? 'right-80' : 'right-8'}
+        />
+      )}
+
+      {/* Energy Dashboard Drawer (Top - slides down) */}
+      <EnergyDashboardDrawer
+        isOpen={energyDrawerOpen}
+        onToggle={() => setEnergyDrawerOpen(!energyDrawerOpen)}
+        energyState={energyState}
+        suggestions={energySuggestions}
+        currentTime={currentTime}
+        onOpenCheckIn={() => setCheckInModalOpen(true)}
+        onStartWorkBlock={handleStartWorkBlock}
+        onEndWorkBlock={handleEndWorkBlock}
+        onStartBreak={handleStartBreak}
+        onEndBreak={handleOpenBreakQualityModal}
+        focusTask={focusTask}
+      />
+
+      {/* Energy Check-in Modal */}
+      <EnergyCheckInModal
+        isVisible={checkInModalOpen}
+        onClose={() => setCheckInModalOpen(false)}
+        onSubmit={handleEnergyCheckIn}
+        existingCheckIn={energyState?.checkIn ?? null}
+      />
+
+      {/* Break Quality Modal */}
+      <BreakQualityModal
+        isVisible={breakQualityModalOpen}
+        onClose={() => setBreakQualityModalOpen(false)}
+        onSubmit={(activities, score) => {
+          handleEndBreak(activities, score);
+          setBreakQualityModalOpen(false);
+        }}
+        activeBreak={energyState?.activeBreak ?? null}
+      />
+
+      {/* Weekly Review Button */}
+      <button
+        onClick={() => {
+          if (weeklyReview && weeklyReview.status === 'in_progress') {
+            setReviewWizardOpen(true);
+          } else {
+            handleStartWeeklyReview();
+          }
+        }}
+        className={`
+          fixed bottom-4 right-4 z-20
+          px-4 py-2
+          bg-slate-900/80 backdrop-blur-md
+          border border-slate-700/50
+          rounded-lg
+          flex items-center gap-2
+          transition-all duration-300
+          hover:bg-slate-800/80 hover:border-cyan-500/30
+          group
+          ${scheduleDrawerOpen ? 'right-80' : 'right-4'}
+        `}
+        style={{ WebkitBackdropFilter: 'blur(12px)' }}
+      >
+        {isReviewDue && (
+          <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
+        )}
+        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-xs font-mono uppercase tracking-wider">
+          {weeklyReview?.status === 'in_progress' ? 'Continue Review' : 'Weekly Review'}
+        </span>
+        {weeklyReview?.status === 'completed' && (
+          <span className="text-emerald-400 text-xs">✓</span>
+        )}
+      </button>
+
+      {/* Weekly Review Wizard Modal */}
+      {weeklyReview && (
+        <WeeklyReviewWizard
+          isVisible={reviewWizardOpen}
+          onClose={() => setReviewWizardOpen(false)}
+          review={weeklyReview}
+          onUpdateStep={handleUpdateReviewStep}
+          onNavigate={handleNavigateReview}
+          onComplete={handleCompleteReview}
+          onAddBigThree={handleAddBigThree}
+          tasks={tasks}
         />
       )}
 
       {/* Version indicator */}
       <div className="fixed bottom-4 left-4 z-10">
         <p className="text-slate-600 text-xs font-mono">PROFFLOW v1.9 // INTENTIONS</p>
+
+        <p className="text-slate-600 text-xs font-mono">PROFFLOW v2.0 // REVIEW</p>
       </div>
     </div>
   );
