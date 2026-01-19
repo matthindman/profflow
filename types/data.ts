@@ -377,3 +377,41 @@ export interface RecoveryState {
   lastMissed: string | null;
   consecutiveMisses: number;
 }
+
+// ============================================
+// Google Calendar Integration
+// ============================================
+
+export interface CalendarAuthFile {
+  version: 1;
+  connected: boolean;
+  accessToken: string | null;
+  refreshToken: string | null;
+  tokenExpiry: string | null;  // ISO datetime
+  email: string | null;
+  connectedAt: string | null;
+}
+
+export interface CalendarEvent {
+  id: string;
+  summary: string;
+  description: string | null;
+  start: string;  // ISO datetime
+  end: string;    // ISO datetime
+  isAllDay: boolean;
+  source: 'google' | 'profflow';
+  calendarId: string;
+}
+
+export interface CalendarSyncState {
+  lastSynced: string | null;
+  syncError: string | null;
+}
+
+export interface CreateCalendarEventInput {
+  summary: string;
+  description?: string;
+  start: string;  // ISO datetime
+  end: string;    // ISO datetime
+  isAllDay?: boolean;
+}

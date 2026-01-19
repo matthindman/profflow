@@ -3,7 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { AsyncLocalStorage } from 'async_hooks';
 import lockfile from 'proper-lockfile';
-import { Task, TasksFile, Plan, PlansFile, Message, MessagesFile, TaskCompletion, CompletionsFile, SettingsFile, LearningsFile, TaskCategory, ProposedOperation, OperationResult, TaskWithCompletion, ImplementationIntention, IntentionsFile, IntentionCue, EnergyFile, EnergyCheckIn, WorkBlock, BreakLog, MoodType, BreakActivityType, DailyEnergyPattern, WeeklyEnergyPattern, WeeklyReview, WeeklyReviewsFile, WeeklyReviewMetrics, BigThreeItem, ReviewStepType, RecoveryFile, RecoveryEvent, RecoveryEventType, RecoveryStatus, RecoveryState, CompassionStyle } from '@/types/data';
+import { Task, TasksFile, Plan, PlansFile, Message, MessagesFile, TaskCompletion, CompletionsFile, SettingsFile, LearningsFile, TaskCategory, ProposedOperation, OperationResult, TaskWithCompletion, ImplementationIntention, IntentionsFile, IntentionCue, EnergyFile, EnergyCheckIn, WorkBlock, BreakLog, MoodType, BreakActivityType, DailyEnergyPattern, WeeklyEnergyPattern, WeeklyReview, WeeklyReviewsFile, WeeklyReviewMetrics, BigThreeItem, ReviewStepType, RecoveryFile, RecoveryEvent, RecoveryEventType, RecoveryStatus, RecoveryState, CompassionStyle, CalendarAuthFile, CalendarEvent, CreateCalendarEventInput } from '@/types/data';
 import { FILE_SCHEMAS } from '@/lib/validation/schemas';
 import { getDataDir } from '@/lib/utils/paths';
 import { getLocalDateString } from '@/lib/utils/date';
@@ -1933,4 +1933,109 @@ export async function getWeeklyRecoveryInsights(): Promise<{
     commonObstacles,
     copingPlansCreated,
   };
+}
+
+// ============================================
+// Google Calendar Integration
+// ============================================
+
+const calendarAuthDefault = (): CalendarAuthFile => ({
+  version: 1,
+  connected: false,
+  accessToken: null,
+  refreshToken: null,
+  tokenExpiry: null,
+  email: null,
+  connectedAt: null,
+});
+
+// Get calendar auth status
+export async function getCalendarAuthStatus(): Promise<{
+  connected: boolean;
+  email: string | null;
+  connectedAt: string | null;
+  tokenExpired: boolean;
+}> {
+  return withGlobalLock(async () => {
+    const file = await readData<CalendarAuthFile>('calendar-auth.json', calendarAuthDefault);
+
+    const tokenExpired = file.tokenExpiry
+      ? new Date(file.tokenExpiry) < new Date()
+      : false;
+
+    return {
+      connected: file.connected,
+      email: file.email,
+      connectedAt: file.connectedAt,
+      tokenExpired: file.connected && tokenExpired,
+    };
+  });
+}
+
+// Store calendar auth tokens after OAuth callback
+export async function storeCalendarTokens(params: {
+  accessToken: string;
+  refreshToken: string;
+  expiryDate: number;
+  email: string;
+}): Promise<void> {
+  return withGlobalLock(async () => {
+    const file = await readData<CalendarAuthFile>('calendar-auth.json', calendarAuthDefault);
+
+    file.connected = true;
+    file.accessToken = params.accessToken;
+    file.refreshToken = params.refreshToken;
+    file.tokenExpiry = new Date(params.expiryDate).toISOString();
+    file.email = params.email;
+    file.connectedAt = new Date().toISOString();
+
+    await writeDataUnsafe('calendar-auth.json', file);
+  });
+}
+
+// Update access token after refresh
+export async function updateCalendarAccessToken(params: {
+  accessToken: string;
+  expiryDate: number;
+}): Promise<void> {
+  return withGlobalLock(async () => {
+    const file = await readData<CalendarAuthFile>('calendar-auth.json', calendarAuthDefault);
+
+    if (!file.connected) {
+      throw new Error('Calendar not connected');
+    }
+
+    file.accessToken = params.accessToken;
+    file.tokenExpiry = new Date(params.expiryDate).toISOString();
+
+    await writeDataUnsafe('calendar-auth.json', file);
+  });
+}
+
+// Get stored tokens for API calls
+export async function getCalendarTokens(): Promise<{
+  accessToken: string | null;
+  refreshToken: string | null;
+  tokenExpiry: string | null;
+} | null> {
+  return withGlobalLock(async () => {
+    const file = await readData<CalendarAuthFile>('calendar-auth.json', calendarAuthDefault);
+
+    if (!file.connected) {
+      return null;
+    }
+
+    return {
+      accessToken: file.accessToken,
+      refreshToken: file.refreshToken,
+      tokenExpiry: file.tokenExpiry,
+    };
+  });
+}
+
+// Disconnect calendar (clear tokens)
+export async function disconnectCalendar(): Promise<void> {
+  return withGlobalLock(async () => {
+    await writeDataUnsafe('calendar-auth.json', calendarAuthDefault());
+  });
 }

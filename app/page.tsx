@@ -213,6 +213,26 @@ interface IntentionRecoveryState {
   consecutiveMisses: number;
 }
 
+// Google Calendar types
+interface CalendarAuthStatus {
+  configured: boolean;
+  connected: boolean;
+  email: string | null;
+  connectedAt: string | null;
+  tokenExpired: boolean;
+}
+
+interface CalendarEvent {
+  id: string;
+  summary: string;
+  description: string | null;
+  start: string;
+  end: string;
+  isAllDay: boolean;
+  source: 'google' | 'profflow';
+  calendarId: string;
+}
+
 // ============================================
 // CONSTANTS
 // ============================================
@@ -2659,6 +2679,315 @@ function BreakQualityModal({
 // COMPASSION PROMPT MODAL
 // ============================================
 
+// ============================================
+// CALENDAR COMPONENTS
+// ============================================
+
+function CalendarConnectionCard({
+  authStatus,
+  onConnect,
+  onDisconnect,
+}: {
+  authStatus: CalendarAuthStatus | null;
+  onConnect: () => void;
+  onDisconnect: () => void;
+}) {
+  if (!authStatus) {
+    return (
+      <div className="p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">
+        <div className="flex items-center gap-2 text-slate-400">
+          <span className="animate-pulse">◎</span>
+          <span className="text-xs font-mono uppercase tracking-wider">Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!authStatus.configured) {
+    return (
+      <div className="p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-amber-400">⚠</span>
+          <span className="text-slate-300 text-sm font-medium">Calendar Not Configured</span>
+        </div>
+        <p className="text-slate-500 text-xs">
+          Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env.local file.
+        </p>
+      </div>
+    );
+  }
+
+  if (!authStatus.connected || authStatus.tokenExpired) {
+    return (
+      <div className="p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-slate-400">📅</span>
+              <span className="text-slate-300 text-sm font-medium">Google Calendar</span>
+            </div>
+            {authStatus.tokenExpired && (
+              <p className="text-amber-400 text-xs">Session expired. Please reconnect.</p>
+            )}
+          </div>
+          <button
+            onClick={onConnect}
+            className="
+              px-3 py-1.5 rounded-lg
+              bg-cyan-500/20 border border-cyan-500/40
+              text-cyan-400 text-xs font-mono uppercase tracking-wider
+              hover:bg-cyan-500/30 transition-colors
+            "
+          >
+            Connect
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 bg-slate-800/30 rounded-lg border border-emerald-500/30">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-emerald-400">✓</span>
+            <span className="text-slate-300 text-sm font-medium">Google Calendar</span>
+          </div>
+          <p className="text-slate-500 text-xs">{authStatus.email}</p>
+        </div>
+        <button
+          onClick={onDisconnect}
+          className="
+            px-3 py-1.5 rounded-lg
+            bg-slate-700/50 border border-slate-600/50
+            text-slate-400 text-xs font-mono uppercase tracking-wider
+            hover:bg-slate-700 hover:text-slate-300 transition-colors
+          "
+        >
+          Disconnect
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CalendarEventList({
+  events,
+  isLoading,
+  currentTime,
+}: {
+  events: CalendarEvent[];
+  isLoading: boolean;
+  currentTime: Date;
+}) {
+  if (isLoading) {
+    return (
+      <div className="p-4 text-center">
+        <span className="text-slate-400 text-xs animate-pulse">Loading events...</span>
+      </div>
+    );
+  }
+
+  if (events.length === 0) {
+    return (
+      <div className="p-4 text-center">
+        <span className="text-slate-500 text-xs">No upcoming events</span>
+      </div>
+    );
+  }
+
+  const formatEventTime = (event: CalendarEvent) => {
+    if (event.isAllDay) return 'All day';
+    const start = new Date(event.start);
+    return start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  };
+
+  const isCurrentEvent = (event: CalendarEvent) => {
+    if (event.isAllDay) return false;
+    const start = new Date(event.start);
+    const end = new Date(event.end);
+    return currentTime >= start && currentTime <= end;
+  };
+
+  // Group events by date
+  const eventsByDate = events.reduce((acc, event) => {
+    const dateKey = event.isAllDay
+      ? event.start.split('T')[0]
+      : new Date(event.start).toLocaleDateString('en-CA');
+    if (!acc[dateKey]) acc[dateKey] = [];
+    acc[dateKey].push(event);
+    return acc;
+  }, {} as Record<string, CalendarEvent[]>);
+
+  const formatDateHeader = (dateKey: string) => {
+    const date = new Date(dateKey + 'T12:00:00');
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    if (date.toDateString() === today.toDateString()) return 'Today';
+    if (date.toDateString() === tomorrow.toDateString()) return 'Tomorrow';
+    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+
+  return (
+    <div className="space-y-4">
+      {Object.entries(eventsByDate).map(([dateKey, dayEvents]) => (
+        <div key={dateKey}>
+          <p className="text-slate-500 text-[10px] font-mono uppercase tracking-wider mb-2">
+            {formatDateHeader(dateKey)}
+          </p>
+          <div className="space-y-2">
+            {dayEvents.map((event) => (
+              <div
+                key={event.id}
+                className={`
+                  p-3 rounded-lg border
+                  ${isCurrentEvent(event)
+                    ? 'bg-cyan-500/10 border-cyan-500/40'
+                    : 'bg-slate-800/30 border-slate-700/50'}
+                  transition-colors
+                `}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-slate-200 text-sm truncate">{event.summary}</p>
+                    {event.description && (
+                      <p className="text-slate-500 text-xs truncate mt-0.5">{event.description}</p>
+                    )}
+                  </div>
+                  <div className="flex-shrink-0">
+                    <span className="text-slate-400 text-xs font-mono">{formatEventTime(event)}</span>
+                  </div>
+                </div>
+                {event.source === 'profflow' && (
+                  <span className="inline-block mt-1 px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 text-[10px] font-mono uppercase rounded">
+                    ProfFlow
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CalendarDrawer({
+  isOpen,
+  onToggle,
+  authStatus,
+  events,
+  isLoading,
+  currentTime,
+  onConnect,
+  onDisconnect,
+  onRefresh,
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+  authStatus: CalendarAuthStatus | null;
+  events: CalendarEvent[];
+  isLoading: boolean;
+  currentTime: Date;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <>
+      {/* Toggle Button */}
+      <button
+        onClick={onToggle}
+        className={`
+          fixed top-1/2 -translate-y-1/2 z-40
+          w-10 h-24
+          bg-slate-900/80 backdrop-blur-md
+          flex items-center justify-center
+          transition-all duration-300 ease-in-out
+          hover:bg-slate-800/80
+          group
+          ${isOpen ? 'right-80 rounded-l-xl border-l border-y border-slate-700/50' : 'right-0 rounded-l-xl border-l border-y border-slate-700/50'}
+        `}
+        style={{ WebkitBackdropFilter: 'blur(12px)' }}
+        title={isOpen ? 'Hide Calendar' : 'Show Calendar'}
+      >
+        <span className={`
+          text-slate-400 group-hover:text-cyan-400
+          transition-transform duration-300
+          ${isOpen ? 'rotate-180' : ''}
+        `}>
+          📅
+        </span>
+      </button>
+
+      {/* Drawer Panel */}
+      <div
+        className={`
+          fixed top-0 right-0 h-full w-80 z-30
+          transform transition-transform duration-300 ease-in-out
+          ${isOpen ? 'translate-x-0' : 'translate-x-full'}
+        `}
+      >
+        <GlassPanel className="h-full flex flex-col rounded-l-xl rounded-r-none" glow>
+          {/* Header */}
+          <div className="p-4 border-b border-slate-700/50">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-cyan-400">📅</span>
+                <h2 className="text-slate-200 font-semibold">Calendar</h2>
+              </div>
+              {authStatus?.connected && (
+                <button
+                  onClick={onRefresh}
+                  disabled={isLoading}
+                  className="
+                    p-2 rounded-lg
+                    hover:bg-slate-800/50
+                    text-slate-400 hover:text-cyan-400
+                    transition-colors
+                    disabled:opacity-50
+                  "
+                  title="Refresh events"
+                >
+                  <span className={isLoading ? 'animate-spin' : ''}>↻</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {/* Connection Status */}
+            <CalendarConnectionCard
+              authStatus={authStatus}
+              onConnect={onConnect}
+              onDisconnect={onDisconnect}
+            />
+
+            {/* Events List */}
+            {authStatus?.connected && !authStatus.tokenExpired && (
+              <div>
+                <p className="text-slate-500 text-[10px] font-mono uppercase tracking-wider mb-3">
+                  Upcoming Events
+                </p>
+                <CalendarEventList
+                  events={events}
+                  isLoading={isLoading}
+                  currentTime={currentTime}
+                />
+              </div>
+            )}
+          </div>
+        </GlassPanel>
+      </div>
+    </>
+  );
+}
+
 function CompassionPromptModal({
   isVisible,
   onClose,
@@ -3516,6 +3845,12 @@ export default function ProfFlowPage() {
   const [compassionPromptOpen, setCompassionPromptOpen] = useState(false);
   const [compassionContext, setCompassionContext] = useState('');
 
+  // Google Calendar state
+  const [calendarAuthStatus, setCalendarAuthStatus] = useState<CalendarAuthStatus | null>(null);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarDrawerOpen, setCalendarDrawerOpen] = useState(false);
+
   const todayDate = getDateAtLocalMidnight(currentTime);
   const scheduleViewDate = addDaysLocal(todayDate, scheduleOffset);
   const scheduleViewDateKey = getLocalDateKey(scheduleViewDate);
@@ -3526,6 +3861,25 @@ export default function ProfFlowPage() {
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(new Date()), 60000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Handle OAuth callback URL parameters
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const calendarConnected = params.get('calendar_connected');
+    const calendarError = params.get('calendar_error');
+
+    if (calendarConnected === 'true') {
+      // Successfully connected - refresh auth status and open drawer
+      fetchCalendarAuthStatus();
+      setCalendarDrawerOpen(true);
+      // Clean up URL
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (calendarError) {
+      console.error('Calendar connection error:', calendarError);
+      // Clean up URL
+      window.history.replaceState({}, '', window.location.pathname);
+    }
   }, []);
 
   // Fetch initial data in parallel for faster load
@@ -3539,6 +3893,7 @@ export default function ProfFlowPage() {
       fetchWeeklyReviewStatus(),
       fetchRecoveryState(),
       fetchIntentionRecoveryStates(),
+      fetchCalendarAuthStatus(),
     ]);
   }, []);
 
@@ -3858,6 +4213,94 @@ export default function ProfFlowPage() {
       setIntentionRecoveryStates(data);
     } catch (err) {
       console.error('Failed to fetch intention recovery states:', err);
+    }
+  };
+
+  const fetchCalendarAuthStatus = async () => {
+    try {
+      const res = await fetch('/api/auth/google/status');
+      if (!res.ok) throw new Error('Failed to fetch calendar auth status');
+      const data = await res.json();
+      setCalendarAuthStatus(data);
+      // If connected, fetch events
+      if (data.connected && !data.tokenExpired) {
+        fetchCalendarEvents();
+      }
+    } catch (err) {
+      console.error('Failed to fetch calendar auth status:', err);
+    }
+  };
+
+  const fetchCalendarEvents = async (timeMin?: string, timeMax?: string) => {
+    setCalendarLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (timeMin) params.set('timeMin', timeMin);
+      if (timeMax) params.set('timeMax', timeMax);
+
+      const url = '/api/calendar/events' + (params.toString() ? '?' + params.toString() : '');
+      const res = await fetch(url);
+
+      if (!res.ok) {
+        const data = await res.json();
+        if (data.needsAuth) {
+          // Token expired or revoked
+          setCalendarAuthStatus(prev => prev ? { ...prev, connected: false, tokenExpired: true } : null);
+          setCalendarEvents([]);
+          return;
+        }
+        throw new Error('Failed to fetch calendar events');
+      }
+
+      const data = await res.json();
+      setCalendarEvents(data.events || []);
+    } catch (err) {
+      console.error('Failed to fetch calendar events:', err);
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
+
+  const handleConnectCalendar = () => {
+    // Redirect to Google OAuth flow
+    window.location.href = '/api/auth/google';
+  };
+
+  const handleDisconnectCalendar = async () => {
+    try {
+      const res = await fetch('/api/auth/google/disconnect', { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to disconnect calendar');
+      setCalendarAuthStatus(prev => prev ? { ...prev, connected: false, email: null } : null);
+      setCalendarEvents([]);
+    } catch (err) {
+      console.error('Failed to disconnect calendar:', err);
+    }
+  };
+
+  const handleAddToCalendar = async (summary: string, start: string, end: string, description?: string) => {
+    try {
+      const res = await fetch('/api/calendar/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ summary, start, end, description }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        if (data.needsAuth) {
+          setCalendarAuthStatus(prev => prev ? { ...prev, connected: false, tokenExpired: true } : null);
+          return null;
+        }
+        throw new Error('Failed to create calendar event');
+      }
+
+      const data = await res.json();
+      // Refresh events
+      fetchCalendarEvents();
+      return data.event;
+    } catch (err) {
+      console.error('Failed to add to calendar:', err);
+      return null;
     }
   };
 
@@ -4319,6 +4762,21 @@ export default function ProfFlowPage() {
         error={scheduleError}
       />
 
+      {/* Calendar Drawer (Right side - Google Calendar) */}
+      {!scheduleDrawerOpen && (
+        <CalendarDrawer
+          isOpen={calendarDrawerOpen}
+          onToggle={() => setCalendarDrawerOpen(!calendarDrawerOpen)}
+          authStatus={calendarAuthStatus}
+          events={calendarEvents}
+          isLoading={calendarLoading}
+          currentTime={currentTime}
+          onConnect={handleConnectCalendar}
+          onDisconnect={handleDisconnectCalendar}
+          onRefresh={() => fetchCalendarEvents()}
+        />
+      )}
+
       {/* Focus Drawer (Bottom - slides up) */}
       <FocusDrawer
         isOpen={focusDrawerOpen}
@@ -4482,7 +4940,7 @@ export default function ProfFlowPage() {
       <div className="fixed bottom-4 left-4 z-10">
         <p className="text-slate-600 text-xs font-mono">PROFFLOW v1.9 // INTENTIONS</p>
 
-        <p className="text-slate-600 text-xs font-mono">PROFFLOW v2.0 // REVIEW</p>
+        <p className="text-slate-600 text-xs font-mono">PROFFLOW v2.1 // CALENDAR</p>
       </div>
     </div>
   );

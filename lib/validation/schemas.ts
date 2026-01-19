@@ -350,6 +350,39 @@ export const RecoveryFileSchemaV1 = z.object({
   lastActiveDate: DateStringSchema.nullable(),
 });
 
+// ============================================
+// Google Calendar Integration Schemas
+// ============================================
+
+export const CalendarAuthFileSchemaV1 = z.object({
+  version: z.literal(1),
+  connected: z.boolean(),
+  accessToken: z.string().nullable(),
+  refreshToken: z.string().nullable(),
+  tokenExpiry: z.string().nullable(),
+  email: z.string().email().nullable(),
+  connectedAt: z.string().nullable(),
+});
+
+export const CalendarEventSchema = z.object({
+  id: z.string(),
+  summary: z.string(),
+  description: z.string().nullable(),
+  start: z.string(),
+  end: z.string(),
+  isAllDay: z.boolean(),
+  source: z.enum(['google', 'profflow']),
+  calendarId: z.string(),
+});
+
+export const CreateCalendarEventInputSchema = z.object({
+  summary: z.string().min(1),
+  description: z.string().optional(),
+  start: z.string(),
+  end: z.string(),
+  isAllDay: z.boolean().optional(),
+});
+
 export const FILE_SCHEMAS: Record<
   string,
   { current: number; schemas: Record<number, z.ZodSchema> }
@@ -393,5 +426,9 @@ export const FILE_SCHEMAS: Record<
   'recovery.json': {
     current: 1,
     schemas: { 1: RecoveryFileSchemaV1 },
+  },
+  'calendar-auth.json': {
+    current: 1,
+    schemas: { 1: CalendarAuthFileSchemaV1 },
   },
 };
