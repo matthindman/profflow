@@ -3369,25 +3369,30 @@ export default function ProfFlowPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch initial data
+  // Fetch initial data in parallel for faster load
   useEffect(() => {
-    fetchTasks();
-    fetchPlan();
-    fetchIntentions();
-
-    fetchEnergyState();
-    fetchEnergySuggestions();
-    fetchWeeklyReviewStatus();
+    Promise.all([
+      fetchTasks(),
+      fetchPlan(),
+      fetchIntentions(),
+      fetchEnergyState(),
+      fetchEnergySuggestions(),
+      fetchWeeklyReviewStatus(),
+    ]);
   }, []);
 
-  // Refresh energy data every minute
+  // Refresh energy data only when there's an active work block or break (need timer updates)
+  // Otherwise, no polling - data refreshes on user actions
   useEffect(() => {
+    const hasActiveTimer = energyState?.activeWorkBlock || energyState?.activeBreak;
+    if (!hasActiveTimer) return;
+
+    // Only poll every 5 minutes when timer is active (for elapsed time display)
     const interval = setInterval(() => {
       fetchEnergyState();
-      fetchEnergySuggestions();
-    }, 60000);
+    }, 300000); // 5 minutes
     return () => clearInterval(interval);
-  }, []);
+  }, [energyState?.activeWorkBlock, energyState?.activeBreak]);
 
   // Load plan for the schedule viewer day (separate from today's plan used for focus).
   useEffect(() => {
@@ -3525,7 +3530,9 @@ export default function ProfFlowPage() {
         return;
       }
 
-      await fetchIntentions();
+      // Use response to update state instead of refetching
+      const newIntention = await res.json();
+      setIntentions((prev) => [newIntention, ...prev]);
     } catch (err) {
       console.error('Failed to create intention:', err);
     }
@@ -3539,6 +3546,11 @@ export default function ProfFlowPage() {
     isActive?: boolean;
     isCopingPlan?: boolean;
   }) => {
+    // Optimistic update
+    setIntentions((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, ...updates } : i))
+    );
+
     try {
       const res = await fetch(`/api/intentions/${id}`, {
         method: 'PATCH',
@@ -3549,17 +3561,23 @@ export default function ProfFlowPage() {
       if (!res.ok) {
         const errorData = await res.json();
         console.error('Failed to update intention:', errorData);
+        // Revert on error by refetching
+        await fetchIntentions();
         return;
       }
-
-      await fetchIntentions();
+      // Success - optimistic update is already applied
     } catch (err) {
       console.error('Failed to update intention:', err);
+      await fetchIntentions(); // Revert on error
     }
   }, []);
 
   const handleDeleteIntention = useCallback(async (id: string) => {
     if (!confirm('Delete this intention?')) return;
+
+    // Optimistic delete
+    const prevIntentions = intentions;
+    setIntentions((prev) => prev.filter((i) => i.id !== id));
 
     try {
       const res = await fetch(`/api/intentions/${id}`, {
@@ -3568,14 +3586,15 @@ export default function ProfFlowPage() {
 
       if (!res.ok) {
         console.error('Failed to delete intention');
+        setIntentions(prevIntentions); // Revert on error
         return;
       }
-
-      await fetchIntentions();
+      // Success - optimistic delete is already applied
     } catch (err) {
       console.error('Failed to delete intention:', err);
+      setIntentions(prevIntentions); // Revert on error
     }
-  }, []);
+  }, [intentions]);
 
   const handleTriggerIntention = useCallback(async (id: string, success: boolean) => {
     // Optimistic update
@@ -3883,8 +3902,7 @@ export default function ProfFlowPage() {
         body: JSON.stringify({ energyLevel, mood, notes }),
       });
       if (!res.ok) throw new Error('Failed to save check-in');
-      await fetchEnergyState();
-      await fetchEnergySuggestions();
+      await Promise.all([fetchEnergyState(), fetchEnergySuggestions()]);
     } catch (err) {
       console.error('Failed to save energy check-in:', err);
     }
@@ -3901,8 +3919,7 @@ export default function ProfFlowPage() {
         }),
       });
       if (!res.ok) throw new Error('Failed to start work block');
-      await fetchEnergyState();
-      await fetchEnergySuggestions();
+      await Promise.all([fetchEnergyState(), fetchEnergySuggestions()]);
     } catch (err) {
       console.error('Failed to start work block:', err);
     }
@@ -3920,8 +3937,7 @@ export default function ProfFlowPage() {
         }),
       });
       if (!res.ok) throw new Error('Failed to end work block');
-      await fetchEnergyState();
-      await fetchEnergySuggestions();
+      await Promise.all([fetchEnergyState(), fetchEnergySuggestions()]);
     } catch (err) {
       console.error('Failed to end work block:', err);
     }
@@ -3935,8 +3951,7 @@ export default function ProfFlowPage() {
         body: JSON.stringify({}),
       });
       if (!res.ok) throw new Error('Failed to start break');
-      await fetchEnergyState();
-      await fetchEnergySuggestions();
+      await Promise.all([fetchEnergyState(), fetchEnergySuggestions()]);
     } catch (err) {
       console.error('Failed to start break:', err);
     }
@@ -3955,8 +3970,7 @@ export default function ProfFlowPage() {
         }),
       });
       if (!res.ok) throw new Error('Failed to end break');
-      await fetchEnergyState();
-      await fetchEnergySuggestions();
+      await Promise.all([fetchEnergyState(), fetchEnergySuggestions()]);
     } catch (err) {
       console.error('Failed to end break:', err);
     }
