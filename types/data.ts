@@ -222,3 +222,87 @@ export interface EnergySuggestion {
   actionable: boolean;
   createdAt: string;
 }
+
+// ============================================
+// Weekly Review Ritual
+// ============================================
+
+export type ReviewStepType =
+  | 'celebrate'      // Step 1: Celebrate progress
+  | 'challenges'     // Step 2: Acknowledge challenges
+  | 'learnings'      // Step 3: Capture learnings
+  | 'values'         // Step 4: Values check
+  | 'big_three'      // Step 5: Plan Big Three for next week
+  | 'schedule';      // Step 6: Schedule confirmation
+
+export interface BigThreeItem {
+  id: string;
+  title: string;
+  category: TaskCategory;
+  linkedTaskId: string | null;
+  completed: boolean;
+}
+
+export interface WeeklyReviewMetrics {
+  tasksCompleted: number;
+  focusBlocksCompleted: number;
+  totalFocusMinutes: number;
+  averageEnergy: number | null;
+  averageFocusRating: number | null;
+  habitsCompletedRate: number | null; // percentage
+}
+
+export interface WeeklyReview {
+  id: string;
+  weekStart: string; // Monday YYYY-MM-DD
+  weekEnd: string; // Sunday YYYY-MM-DD
+
+  // Step 1: Celebrate
+  wins: string[];
+  progressRating: number | null; // 1-5 how satisfied with progress
+
+  // Step 2: Challenges
+  challenges: string[];
+  obstacles: string[];
+
+  // Step 3: Learnings
+  learnings: string[];
+  insights: string[];
+
+  // Step 4: Values check
+  valuesAlignment: number | null; // 1-5 how aligned work was with values
+  valuesReflection: string | null;
+
+  // Step 5: Big Three for next week
+  bigThree: BigThreeItem[];
+
+  // Step 6: Schedule confirmation
+  scheduleConfirmed: boolean;
+  scheduledFocusBlocks: number | null;
+  capacityCheck: number | null; // percentage of time scheduled (target 60-70%)
+
+  // Metrics snapshot
+  metrics: WeeklyReviewMetrics;
+
+  // Metadata
+  status: 'in_progress' | 'completed';
+  currentStep: ReviewStepType;
+  startedAt: string;
+  completedAt: string | null;
+  durationMinutes: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WeeklyReviewsFile {
+  version: 2;
+  reviews: WeeklyReview[];
+}
+
+export interface ReviewReminder {
+  id: string;
+  weekStart: string;
+  scheduledFor: string; // ISO datetime
+  dismissed: boolean;
+  createdAt: string;
+}
