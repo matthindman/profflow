@@ -1975,7 +1975,7 @@ export async function getCalendarAuthStatus(): Promise<{
 // Store calendar auth tokens after OAuth callback
 export async function storeCalendarTokens(params: {
   accessToken: string;
-  refreshToken: string;
+  refreshToken: string | null;
   expiryDate: number;
   email: string;
 }): Promise<void> {
@@ -1984,7 +1984,10 @@ export async function storeCalendarTokens(params: {
 
     file.connected = true;
     file.accessToken = params.accessToken;
-    file.refreshToken = params.refreshToken;
+    // Only update refresh token if a new one was provided
+    if (params.refreshToken) {
+      file.refreshToken = params.refreshToken;
+    }
     file.tokenExpiry = new Date(params.expiryDate).toISOString();
     file.email = params.email;
     file.connectedAt = new Date().toISOString();

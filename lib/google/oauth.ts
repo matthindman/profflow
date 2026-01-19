@@ -30,20 +30,22 @@ export function getAuthUrl(): string {
 
 export async function exchangeCodeForTokens(code: string): Promise<{
   accessToken: string;
-  refreshToken: string;
+  refreshToken: string | null;
   expiryDate: number;
 }> {
   const oauth2Client = getOAuth2Client();
 
   const { tokens } = await oauth2Client.getToken(code);
 
-  if (!tokens.access_token || !tokens.refresh_token) {
-    throw new Error('Failed to get tokens from Google');
+  if (!tokens.access_token) {
+    throw new Error('Failed to get access token from Google');
   }
 
+  // refresh_token is only sent on first authorization
+  // On subsequent auths, we keep the existing refresh_token
   return {
     accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
+    refreshToken: tokens.refresh_token || null,
     expiryDate: tokens.expiry_date || Date.now() + 3600 * 1000,
   };
 }
