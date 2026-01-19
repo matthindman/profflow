@@ -193,6 +193,26 @@ interface ChatMessage {
   timestamp: Date;
 }
 
+// Recovery & Self-Compassion types
+type RecoveryEventType = 'missed_task' | 'missed_intention' | 'missed_day' | 'return_after_gap';
+type RecoveryStatus = 'green' | 'yellow' | 'recovering';
+
+interface RecoveryState {
+  daysInactive: number;
+  needsReturnFlow: boolean;
+  needsCompassionPrompt: boolean;
+  promptType: RecoveryEventType | null;
+  compassionMessage: { message: string; actionPrompt: string } | null;
+}
+
+interface IntentionRecoveryState {
+  intentionId: string;
+  status: RecoveryStatus;
+  lastCompleted: string | null;
+  lastMissed: string | null;
+  consecutiveMisses: number;
+}
+
 // ============================================
 // CONSTANTS
 // ============================================
@@ -2636,6 +2656,139 @@ function BreakQualityModal({
 }
 
 // ============================================
+// COMPASSION PROMPT MODAL
+// ============================================
+
+function CompassionPromptModal({
+  isVisible,
+  onClose,
+  recoveryState,
+  onSubmit,
+  context,
+  setContext,
+}: {
+  isVisible: boolean;
+  onClose: () => void;
+  recoveryState: RecoveryState | null;
+  onSubmit: (context: string | null, nextAction: string | null, createCopingPlan: boolean) => void;
+  context: string;
+  setContext: (value: string) => void;
+}) {
+  const [nextAction, setNextAction] = useState('');
+  const [createCopingPlan, setCreateCopingPlan] = useState(false);
+
+  if (!isVisible || !recoveryState?.compassionMessage) return null;
+
+  const { message, actionPrompt } = recoveryState.compassionMessage;
+  const isReturnFlow = recoveryState.promptType === 'return_after_gap';
+
+  const handleSubmit = () => {
+    onSubmit(
+      context.trim() || null,
+      nextAction.trim() || null,
+      createCopingPlan
+    );
+    setNextAction('');
+    setCreateCopingPlan(false);
+  };
+
+  const handleDismiss = () => {
+    onSubmit(null, null, false);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-8">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={handleDismiss} />
+      <GlassPanel className="relative w-full max-w-md p-6" glow>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <span className="text-amber-400 text-lg">♡</span>
+            <h2 className="text-slate-200 font-semibold tracking-wide">
+              {isReturnFlow ? 'WELCOME BACK' : 'A GENTLE CHECK-IN'}
+            </h2>
+          </div>
+          <button onClick={handleDismiss} className="text-slate-500 hover:text-slate-300 transition-colors p-1">
+            ✕
+          </button>
+        </div>
+
+        {/* Compassion message */}
+        <div className="bg-slate-800/30 rounded-lg p-4 mb-6 border border-slate-700/30">
+          <p className="text-slate-200 text-sm leading-relaxed">{message}</p>
+        </div>
+
+        {/* Context input (what got in the way) */}
+        {!isReturnFlow && (
+          <div className="mb-4">
+            <label className="text-slate-400 text-sm block mb-2">
+              What got in the way? <span className="text-slate-600">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={context}
+              onChange={(e) => setContext(e.target.value)}
+              placeholder="Kids needed attention, meeting ran long, felt tired..."
+              className="w-full p-3 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-amber-500/50 text-sm"
+            />
+          </div>
+        )}
+
+        {/* Next action prompt */}
+        <div className="mb-4">
+          <label className="text-slate-400 text-sm block mb-2">{actionPrompt}</label>
+          <input
+            type="text"
+            value={nextAction}
+            onChange={(e) => setNextAction(e.target.value)}
+            placeholder="Open my document, send one email, read for 5 minutes..."
+            className="w-full p-3 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 text-sm"
+          />
+        </div>
+
+        {/* Create coping plan option */}
+        {context && (
+          <div className="mb-6">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={createCopingPlan}
+                onChange={(e) => setCreateCopingPlan(e.target.checked)}
+                className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-cyan-500 focus:ring-cyan-500/50"
+              />
+              <span className="text-slate-400 text-sm">
+                Create a coping plan for when this happens again
+              </span>
+            </label>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-3">
+          <button
+            onClick={handleDismiss}
+            className="flex-1 py-3 rounded-lg bg-slate-800/50 border border-slate-700/30 text-slate-400 hover:text-slate-200 hover:border-slate-600/50 transition-colors text-sm"
+          >
+            Not now
+          </button>
+          <button
+            onClick={handleSubmit}
+            className="flex-1 py-3 rounded-lg bg-amber-600/20 border border-amber-500/30 text-amber-400 hover:bg-amber-600/30 transition-colors text-sm font-medium"
+          >
+            {nextAction ? "Let's do it" : 'Acknowledge'}
+          </button>
+        </div>
+
+        {/* Gentle reminder */}
+        <p className="text-center text-slate-600 text-xs mt-4">
+          Remember: One miss is just data. You've got this.
+        </p>
+      </GlassPanel>
+    </div>
+  );
+}
+
+// ============================================
 // ENERGY DASHBOARD DRAWER
 // ============================================
 
@@ -3357,6 +3510,12 @@ export default function ProfFlowPage() {
   const [reviewWizardOpen, setReviewWizardOpen] = useState(false);
   const [isReviewDue, setIsReviewDue] = useState(false);
 
+  // Self-Compassion & Recovery state
+  const [recoveryState, setRecoveryState] = useState<RecoveryState | null>(null);
+  const [intentionRecoveryStates, setIntentionRecoveryStates] = useState<IntentionRecoveryState[]>([]);
+  const [compassionPromptOpen, setCompassionPromptOpen] = useState(false);
+  const [compassionContext, setCompassionContext] = useState('');
+
   const todayDate = getDateAtLocalMidnight(currentTime);
   const scheduleViewDate = addDaysLocal(todayDate, scheduleOffset);
   const scheduleViewDateKey = getLocalDateKey(scheduleViewDate);
@@ -3378,6 +3537,8 @@ export default function ProfFlowPage() {
       fetchEnergyState(),
       fetchEnergySuggestions(),
       fetchWeeklyReviewStatus(),
+      fetchRecoveryState(),
+      fetchIntentionRecoveryStates(),
     ]);
   }, []);
 
@@ -3671,6 +3832,32 @@ export default function ProfFlowPage() {
       setIsReviewDue(data.isDue || false);
     } catch (err) {
       console.error('Failed to fetch weekly review status:', err);
+    }
+  };
+
+  const fetchRecoveryState = async () => {
+    try {
+      const res = await fetch('/api/recovery');
+      if (!res.ok) throw new Error('Failed to fetch recovery state');
+      const data = await res.json();
+      setRecoveryState(data);
+      // Auto-show compassion prompt if needed
+      if (data.needsCompassionPrompt && !compassionPromptOpen) {
+        setCompassionPromptOpen(true);
+      }
+    } catch (err) {
+      console.error('Failed to fetch recovery state:', err);
+    }
+  };
+
+  const fetchIntentionRecoveryStates = async () => {
+    try {
+      const res = await fetch('/api/recovery/intentions');
+      if (!res.ok) throw new Error('Failed to fetch intention recovery states');
+      const data = await res.json();
+      setIntentionRecoveryStates(data);
+    } catch (err) {
+      console.error('Failed to fetch intention recovery states:', err);
     }
   };
 
@@ -3980,6 +4167,40 @@ export default function ProfFlowPage() {
     setBreakQualityModalOpen(true);
   }, []);
 
+  // Self-Compassion handlers
+  const handleCompassionResponse = useCallback(async (
+    context: string | null,
+    nextAction: string | null,
+    createCopingPlan: boolean
+  ) => {
+    if (!recoveryState?.promptType) return;
+
+    try {
+      // Record the recovery event
+      await fetch('/api/recovery', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: recoveryState.promptType,
+          context,
+          nextActionTaken: nextAction,
+          dismissed: !context && !nextAction,
+        }),
+      });
+
+      // If user wants to create a coping plan, open the intention modal
+      if (createCopingPlan && context) {
+        setIntentionModalOpen(true);
+        // Pre-fill could be added here
+      }
+
+      setCompassionPromptOpen(false);
+      setCompassionContext('');
+    } catch (err) {
+      console.error('Failed to record recovery response:', err);
+    }
+  }, [recoveryState?.promptType]);
+
   // Weekly review handlers
   const handleStartWeeklyReview = useCallback(async () => {
     try {
@@ -4197,6 +4418,16 @@ export default function ProfFlowPage() {
           setBreakQualityModalOpen(false);
         }}
         activeBreak={energyState?.activeBreak ?? null}
+      />
+
+      {/* Self-Compassion Prompt Modal */}
+      <CompassionPromptModal
+        isVisible={compassionPromptOpen}
+        onClose={() => setCompassionPromptOpen(false)}
+        recoveryState={recoveryState}
+        onSubmit={handleCompassionResponse}
+        context={compassionContext}
+        setContext={setCompassionContext}
       />
 
       {/* Weekly Review Button */}

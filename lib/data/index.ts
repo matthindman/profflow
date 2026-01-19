@@ -3,7 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { AsyncLocalStorage } from 'async_hooks';
 import lockfile from 'proper-lockfile';
-import { Task, TasksFile, Plan, PlansFile, Message, MessagesFile, TaskCompletion, CompletionsFile, SettingsFile, LearningsFile, TaskCategory, ProposedOperation, OperationResult, TaskWithCompletion, ImplementationIntention, IntentionsFile, IntentionCue, EnergyFile, EnergyCheckIn, WorkBlock, BreakLog, MoodType, BreakActivityType, DailyEnergyPattern, WeeklyEnergyPattern, WeeklyReview, WeeklyReviewsFile, WeeklyReviewMetrics, BigThreeItem, ReviewStepType } from '@/types/data';
+import { Task, TasksFile, Plan, PlansFile, Message, MessagesFile, TaskCompletion, CompletionsFile, SettingsFile, LearningsFile, TaskCategory, ProposedOperation, OperationResult, TaskWithCompletion, ImplementationIntention, IntentionsFile, IntentionCue, EnergyFile, EnergyCheckIn, WorkBlock, BreakLog, MoodType, BreakActivityType, DailyEnergyPattern, WeeklyEnergyPattern, WeeklyReview, WeeklyReviewsFile, WeeklyReviewMetrics, BigThreeItem, ReviewStepType, RecoveryFile, RecoveryEvent, RecoveryEventType, RecoveryStatus, RecoveryState, CompassionStyle } from '@/types/data';
 import { FILE_SCHEMAS } from '@/lib/validation/schemas';
 import { getDataDir } from '@/lib/utils/paths';
 import { getLocalDateString } from '@/lib/utils/date';
@@ -1632,4 +1632,305 @@ export async function isWeeklyReviewDue(): Promise<{ isDue: boolean; weekStart: 
   }
 
   return { isDue: false, weekStart: null };
+}
+
+// ============================================
+// Self-Compassion & Recovery
+// ============================================
+
+const recoveryDefault = (): RecoveryFile => ({
+  version: 1,
+  events: [],
+  lastActiveDate: null,
+});
+
+// Compassion messages - varied to prevent habituation
+const COMPASSION_MESSAGES = {
+  missed_task: {
+    gentle: [
+      "That's okay. What got in the way?",
+      "Setbacks are data, not verdicts. What happened?",
+      "This is part of the process. What's one small step you can take now?",
+    ],
+    coach: [
+      "Let's figure out what happened. What got in the way?",
+      "No judgment here. What blocked you?",
+      "One miss is just information. What can we learn?",
+    ],
+    minimal: [
+      "What got in the way?",
+      "What happened?",
+    ],
+  },
+  missed_day: {
+    gentle: [
+      "Yesterday didn't go as planned. Today is a fresh start.",
+      "One day doesn't define your progress. What's your one priority today?",
+      "You're human. What's the smallest thing you can do right now?",
+    ],
+    coach: [
+      "Yesterday's gone. What's the one thing for today?",
+      "Fresh day, clean slate. What matters most?",
+      "Let's focus forward. What's the priority?",
+    ],
+    minimal: [
+      "New day. What's the priority?",
+      "What's one thing for today?",
+    ],
+  },
+  return_after_gap: {
+    gentle: [
+      "Welcome back. No guilt, just a fresh start.",
+      "Life happened. Let's ease back in with something small.",
+      "You're here now—that's what matters. What feels manageable today?",
+    ],
+    coach: [
+      "Good to see you back. Let's start simple.",
+      "You showed up—that's the first win. What's next?",
+      "Welcome back. What's one small thing you can do?",
+    ],
+    minimal: [
+      "Welcome back. What's one small thing?",
+      "Good to have you. What feels doable?",
+    ],
+  },
+};
+
+const ACTION_PROMPTS = [
+  "What's one small thing you can do in the next 10 minutes?",
+  "What's the easiest task you could start right now?",
+  "What's the smallest step forward?",
+];
+
+// Get a random compassion message
+export function getCompassionMessage(
+  type: RecoveryEventType,
+  style: CompassionStyle = 'gentle'
+): { message: string; actionPrompt: string } {
+  const messages = COMPASSION_MESSAGES[type as keyof typeof COMPASSION_MESSAGES];
+  if (!messages) {
+    return {
+      message: "Let's get back on track.",
+      actionPrompt: ACTION_PROMPTS[0],
+    };
+  }
+
+  const styleMessages = messages[style] || messages.gentle;
+  const message = styleMessages[Math.floor(Math.random() * styleMessages.length)];
+  const actionPrompt = ACTION_PROMPTS[Math.floor(Math.random() * ACTION_PROMPTS.length)];
+
+  return { message, actionPrompt };
+}
+
+// Update last active date
+export async function updateLastActiveDate(): Promise<void> {
+  const today = getLocalDateString(new Date());
+  await updateData<void>('recovery.json', recoveryDefault, (file: RecoveryFile) => {
+    file.lastActiveDate = today;
+    return undefined;
+  });
+}
+
+// Get recovery state - check for gaps, missed items
+export async function getRecoveryState(): Promise<{
+  daysInactive: number;
+  needsReturnFlow: boolean;
+  needsCompassionPrompt: boolean;
+  promptType: RecoveryEventType | null;
+  recentEvents: RecoveryEvent[];
+}> {
+  return withGlobalLock(async () => {
+    const recoveryFile = await readDataUnlocked<RecoveryFile>('recovery.json', recoveryDefault);
+    const completionsFile = await readDataUnlocked<CompletionsFile>('completions.json', completionsDefault);
+    const intentionsFile = await readDataUnlocked<IntentionsFile>('intentions.json', intentionsDefault);
+
+    const today = getLocalDateString(new Date());
+    const yesterday = getLocalDateString(new Date(Date.now() - 86400000));
+
+    // Calculate days inactive
+    let daysInactive = 0;
+    if (recoveryFile.lastActiveDate) {
+      const lastActive = new Date(recoveryFile.lastActiveDate + 'T00:00:00');
+      const now = new Date(today + 'T00:00:00');
+      daysInactive = Math.floor((now.getTime() - lastActive.getTime()) / 86400000);
+    }
+
+    // Check if return flow needed (3+ days inactive)
+    const needsReturnFlow = daysInactive >= 3;
+
+    // Check for missed intentions yesterday (if not returning from gap)
+    let needsCompassionPrompt = false;
+    let promptType: RecoveryEventType | null = null;
+
+    if (!needsReturnFlow && daysInactive === 1) {
+      // Check if any active intentions were missed yesterday
+      const activeIntentions = intentionsFile.intentions.filter(i => i.isActive);
+      const yesterdayCompletions = completionsFile.completions.filter(
+        c => c.completedOnDate === yesterday
+      );
+
+      // Simple heuristic: if there were active intentions but no completions, might need prompt
+      if (activeIntentions.length > 0 && yesterdayCompletions.length === 0) {
+        needsCompassionPrompt = true;
+        promptType = 'missed_day';
+      }
+    }
+
+    if (needsReturnFlow) {
+      promptType = 'return_after_gap';
+      needsCompassionPrompt = true;
+    }
+
+    // Get recent recovery events (last 7 days)
+    const weekAgo = getLocalDateString(new Date(Date.now() - 7 * 86400000));
+    const recentEvents = recoveryFile.events.filter(e => e.date >= weekAgo);
+
+    return {
+      daysInactive,
+      needsReturnFlow,
+      needsCompassionPrompt,
+      promptType,
+      recentEvents,
+    };
+  });
+}
+
+// Record a recovery event
+export async function recordRecoveryEvent(
+  type: RecoveryEventType,
+  data: {
+    relatedId?: string | null;
+    context?: string | null;
+    copingPlanCreated?: string | null;
+    nextActionTaken?: string | null;
+    dismissed?: boolean;
+  }
+): Promise<RecoveryEvent> {
+  const today = getLocalDateString(new Date());
+
+  return updateData<RecoveryEvent>('recovery.json', recoveryDefault, (file: RecoveryFile) => {
+    const event: RecoveryEvent = {
+      id: crypto.randomUUID(),
+      date: today,
+      type,
+      relatedId: data.relatedId ?? null,
+      context: data.context ?? null,
+      copingPlanCreated: data.copingPlanCreated ?? null,
+      nextActionTaken: data.nextActionTaken ?? null,
+      dismissed: data.dismissed ?? false,
+      createdAt: new Date().toISOString(),
+    };
+
+    file.events.push(event);
+    file.lastActiveDate = today;
+
+    return event;
+  });
+}
+
+// Get "Never Miss Twice" status for intentions
+export async function getIntentionRecoveryStates(): Promise<RecoveryState[]> {
+  return withGlobalLock(async () => {
+    const intentionsFile = await readDataUnlocked<IntentionsFile>('intentions.json', intentionsDefault);
+    const completionsFile = await readDataUnlocked<CompletionsFile>('completions.json', completionsDefault);
+
+    const today = getLocalDateString(new Date());
+    const yesterday = getLocalDateString(new Date(Date.now() - 86400000));
+    const twoDaysAgo = getLocalDateString(new Date(Date.now() - 2 * 86400000));
+
+    const states: RecoveryState[] = [];
+
+    for (const intention of intentionsFile.intentions.filter(i => i.isActive)) {
+      // Check completion history for this intention's linked task
+      const recentCompletions = intention.taskId
+        ? completionsFile.completions.filter(
+            c => c.taskId === intention.taskId &&
+            (c.completedOnDate === today || c.completedOnDate === yesterday || c.completedOnDate === twoDaysAgo)
+          )
+        : [];
+
+      // Also check intention's own trigger history
+      const lastTriggered = intention.lastTriggeredAt
+        ? getLocalDateString(new Date(intention.lastTriggeredAt))
+        : null;
+
+      // Determine status
+      let status: RecoveryStatus = 'green';
+      let consecutiveMisses = 0;
+
+      const completedToday = recentCompletions.some(c => c.completedOnDate === today) || lastTriggered === today;
+      const completedYesterday = recentCompletions.some(c => c.completedOnDate === yesterday) || lastTriggered === yesterday;
+      const completedTwoDaysAgo = recentCompletions.some(c => c.completedOnDate === twoDaysAgo) || lastTriggered === twoDaysAgo;
+
+      if (completedToday) {
+        status = 'green';
+      } else if (completedYesterday) {
+        status = 'green'; // Still green if done yesterday
+      } else if (completedTwoDaysAgo) {
+        status = 'yellow'; // Missed yesterday, recovery window
+        consecutiveMisses = 1;
+      } else {
+        status = 'recovering'; // Multiple misses
+        consecutiveMisses = 2;
+      }
+
+      states.push({
+        intentionId: intention.id,
+        status,
+        lastCompleted: lastTriggered,
+        lastMissed: !completedYesterday && !completedToday ? yesterday : null,
+        consecutiveMisses,
+      });
+    }
+
+    return states;
+  });
+}
+
+// Dismiss a compassion prompt without action
+export async function dismissCompassionPrompt(type: RecoveryEventType): Promise<void> {
+  await recordRecoveryEvent(type, { dismissed: true });
+}
+
+// Get recovery insights for the week
+export async function getWeeklyRecoveryInsights(): Promise<{
+  totalMisses: number;
+  totalRecoveries: number;
+  commonObstacles: string[];
+  copingPlansCreated: number;
+}> {
+  const file = await readData<RecoveryFile>('recovery.json', recoveryDefault);
+  const weekAgo = getLocalDateString(new Date(Date.now() - 7 * 86400000));
+
+  const weekEvents = file.events.filter(e => e.date >= weekAgo);
+
+  const totalMisses = weekEvents.filter(e =>
+    e.type === 'missed_task' || e.type === 'missed_intention' || e.type === 'missed_day'
+  ).length;
+
+  const totalRecoveries = weekEvents.filter(e => e.nextActionTaken !== null).length;
+
+  const obstacles = weekEvents
+    .filter(e => e.context !== null)
+    .map(e => e.context!);
+
+  // Simple frequency count for common obstacles
+  const obstacleCount = new Map<string, number>();
+  for (const obstacle of obstacles) {
+    obstacleCount.set(obstacle, (obstacleCount.get(obstacle) || 0) + 1);
+  }
+
+  const commonObstacles = Array.from(obstacleCount.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([obstacle]) => obstacle);
+
+  const copingPlansCreated = weekEvents.filter(e => e.copingPlanCreated !== null).length;
+
+  return {
+    totalMisses,
+    totalRecoveries,
+    commonObstacles,
+    copingPlansCreated,
+  };
 }

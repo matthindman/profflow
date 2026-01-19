@@ -335,3 +335,45 @@ export interface ReviewReminder {
   dismissed: boolean;
   createdAt: string;
 }
+
+// ============================================
+// Self-Compassion & Streak Recovery
+// ============================================
+
+export type RecoveryEventType = 'missed_task' | 'missed_intention' | 'missed_day' | 'return_after_gap';
+export type CompassionStyle = 'gentle' | 'coach' | 'minimal';
+
+export interface RecoveryEvent {
+  id: string;
+  date: string;
+  type: RecoveryEventType;
+  relatedId: string | null;       // Task or intention ID if applicable
+  context: string | null;         // What got in the way
+  copingPlanCreated: string | null; // ID of resulting coping intention
+  nextActionTaken: string | null; // What user committed to
+  dismissed: boolean;             // User dismissed without action
+  createdAt: string;
+}
+
+export interface CompassionSettings {
+  enableCompassionPrompts: boolean;
+  missedDayThreshold: number;     // Days before "return" flow (default 3)
+  preferredStyle: CompassionStyle;
+}
+
+export interface RecoveryFile {
+  version: 1;
+  events: RecoveryEvent[];
+  lastActiveDate: string | null;  // Track when user was last active
+}
+
+// "Never Miss Twice" status for habits/intentions
+export type RecoveryStatus = 'green' | 'yellow' | 'recovering';
+
+export interface RecoveryState {
+  intentionId: string;
+  status: RecoveryStatus;
+  lastCompleted: string | null;
+  lastMissed: string | null;
+  consecutiveMisses: number;
+}

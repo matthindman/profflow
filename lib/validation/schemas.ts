@@ -313,6 +313,43 @@ export const WeeklyReviewsFileSchemaV2 = z.object({
   reviews: z.array(WeeklyReviewSchema),
 });
 
+// ============================================
+// Self-Compassion & Recovery Schemas
+// ============================================
+
+export const RecoveryEventTypeSchema = z.enum([
+  'missed_task',
+  'missed_intention',
+  'missed_day',
+  'return_after_gap',
+]);
+
+export const CompassionStyleSchema = z.enum(['gentle', 'coach', 'minimal']);
+
+export const RecoveryEventSchema = z.object({
+  id: UUIDSchema,
+  date: DateStringSchema,
+  type: RecoveryEventTypeSchema,
+  relatedId: UUIDSchema.nullable(),
+  context: z.string().nullable(),
+  copingPlanCreated: UUIDSchema.nullable(),
+  nextActionTaken: z.string().nullable(),
+  dismissed: z.boolean(),
+  createdAt: z.string(),
+});
+
+export const CompassionSettingsSchema = z.object({
+  enableCompassionPrompts: z.boolean(),
+  missedDayThreshold: z.number().int().min(1).max(14),
+  preferredStyle: CompassionStyleSchema,
+});
+
+export const RecoveryFileSchemaV1 = z.object({
+  version: z.literal(1),
+  events: z.array(RecoveryEventSchema),
+  lastActiveDate: DateStringSchema.nullable(),
+});
+
 export const FILE_SCHEMAS: Record<
   string,
   { current: number; schemas: Record<number, z.ZodSchema> }
@@ -352,5 +389,9 @@ export const FILE_SCHEMAS: Record<
   'weekly-reviews.json': {
     current: 2,
     schemas: { 2: WeeklyReviewsFileSchemaV2 },
+  },
+  'recovery.json': {
+    current: 1,
+    schemas: { 1: RecoveryFileSchemaV1 },
   },
 };
