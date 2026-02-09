@@ -254,8 +254,16 @@ const BLOCK_TYPE_STYLES = {
   life: { bg: 'bg-rose-500/20', border: 'border-rose-500/40', label: 'Life' },
 } as const;
 
+const CALENDAR_EVENT_STYLE = {
+  bg: 'bg-amber-500/10',
+  border: 'border-amber-500/40',
+  label: 'Google Calendar',
+  color: 'text-amber-400',
+} as const;
+
 const SCHEDULE_OFFSET_MIN = -1;
 const SCHEDULE_OFFSET_MAX = 2;
+const CALENDAR_LOOKAHEAD_DAYS = 2;
 
 const CUE_TYPE_CONFIG = {
   time: { label: 'Time', icon: '⏰', example: 'At 9:00 AM' },
@@ -312,6 +320,23 @@ function addDaysLocal(base: Date, days: number): Date {
   const date = new Date(base.getFullYear(), base.getMonth(), base.getDate());
   date.setDate(date.getDate() + days);
   return date;
+}
+
+function parseTimeOnDate(base: Date, time: string): Date {
+  const [hourRaw, minuteRaw] = time.split(':');
+  const hour = Number(hourRaw || 0);
+  const minute = Number(minuteRaw || 0);
+  return new Date(base.getFullYear(), base.getMonth(), base.getDate(), hour, minute);
+}
+
+function parseCalendarDateTime(value: string): Date {
+  return new Date(value.includes('T') ? value : `${value}T00:00:00`);
+}
+
+function getLocalDayRange(base: Date): { start: Date; end: Date } {
+  const start = getDateAtLocalMidnight(base);
+  const end = addDaysLocal(start, 1);
+  return { start, end };
 }
 
 function getScheduleOffsetTag(offset: number): string {
@@ -537,6 +562,7 @@ function TaskDrawer({
   onSelectTask,
   onSetTaskCompleted,
   onUpdateManifestOrder,
+  onAddTask,
 }: {
   isOpen: boolean;
   onToggle: () => void;
@@ -544,6 +570,7 @@ function TaskDrawer({
   onSelectTask: (task: Task) => void;
   onSetTaskCompleted: (task: Task, completed: boolean) => void;
   onUpdateManifestOrder: (orderByCategory: Record<TaskCategoryKey, string[]>) => Promise<void>;
+  onAddTask: (title: string, category: Task['category']) => Promise<void>;
 }) {
   const isCompletedToday = (task: Task) => Boolean(task.completedToday);
   const isVisibleInManifest = (task: Task) =>
@@ -566,6 +593,23 @@ function TaskDrawer({
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const manifestSnapshotRef = useRef<Record<TaskCategoryKey, string[]> | null>(null);
   const [manifestSaving, setManifestSaving] = useState(false);
+  const [addingToCategory, setAddingToCategory] = useState<TaskCategoryKey | null>(null);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const addInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (addingToCategory && addInputRef.current) {
+      addInputRef.current.focus();
+    }
+  }, [addingToCategory]);
+
+  const handleQuickAdd = async (category: TaskCategoryKey) => {
+    const title = newTaskTitle.trim();
+    if (!title) return;
+    setNewTaskTitle('');
+    setAddingToCategory(null);
+    await onAddTask(title, category);
+  };
 
   useEffect(() => {
     if (activeDragId) return;
@@ -706,21 +750,27 @@ function TaskDrawer({
       <button
         onClick={onToggle}
         className={`
-          fixed left-4 top-1/2 -translate-y-1/2 z-50
-          w-12 h-24 
+          fixed left-0 top-1/2 -translate-y-1/2 z-50
+          px-3 py-4
           bg-slate-900/80 backdrop-blur-md
-          border border-slate-700/50
-          rounded-r-lg
-          flex items-center justify-center
+          border border-l-0 border-slate-700/50
+          rounded-r-xl
+          flex flex-col items-center justify-center gap-2
           transition-all duration-300
-          hover:bg-slate-800/80 hover:border-cyan-500/30
+          hover:bg-slate-800/80 hover:border-cyan-500/30 hover:px-4
           group
           ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
         `}
         style={{ WebkitBackdropFilter: 'blur(12px)' }}
         aria-label="Open task list"
       >
-        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-lg">
+        <span className="text-cyan-400 text-sm font-mono">◆</span>
+        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-[10px] font-mono uppercase tracking-widest"
+          style={{ writingMode: 'vertical-lr' }}
+        >
+          Tasks
+        </span>
+        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-xs">
           ▶
         </span>
       </button>
@@ -767,6 +817,7 @@ function TaskDrawer({
               {categories.map((category) => {
                 const config = CATEGORY_CONFIG[category];
                 const taskIds = manifestOrder[category] ?? [];
+                const isAdding = addingToCategory === category;
                 return (
                   <CategoryDropZone key={category} id={category}>
                     <div className="space-y-2">
@@ -776,13 +827,89 @@ function TaskDrawer({
                           {config.label}
                         </span>
                         <span className="text-slate-600 text-xs">({taskIds.length})</span>
+                        <button
+                          onClick={() => {
+                            setAddingToCategory(isAdding ? null : category);
+                            setNewTaskTitle('');
+                          }}
+                          className={`
+                            ml-auto w-5 h-5 rounded flex items-center justify-center
+                            transition-colors text-xs
+                            ${isAdding
+                              ? 'bg-slate-700 text-slate-300'
+                              : 'text-slate-600 hover:text-slate-400 hover:bg-slate-800/50'}
+                          `}
+                          aria-label={`Add task to ${config.label}`}
+                        >
+                          {isAdding ? '✕' : '+'}
+                        </button>
                       </div>
 
+                      {/* Inline quick-add input */}
+                      {isAdding && (
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            handleQuickAdd(category);
+                          }}
+                          className="pl-5"
+                        >
+                          <div className="flex gap-1.5">
+                            <input
+                              ref={addInputRef}
+                              type="text"
+                              value={newTaskTitle}
+                              onChange={(e) => setNewTaskTitle(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Escape') {
+                                  setAddingToCategory(null);
+                                  setNewTaskTitle('');
+                                }
+                              }}
+                              placeholder="Task title..."
+                              className="
+                                flex-1 min-w-0 px-2.5 py-1.5 rounded
+                                bg-slate-800/60 border border-slate-700/50
+                                text-slate-200 text-sm placeholder-slate-600
+                                focus:outline-none focus:border-cyan-500/50
+                                transition-colors
+                              "
+                            />
+                            <button
+                              type="submit"
+                              disabled={!newTaskTitle.trim()}
+                              className="
+                                px-2.5 py-1.5 rounded text-xs font-medium
+                                bg-cyan-600/20 border border-cyan-500/30
+                                text-cyan-400
+                                hover:bg-cyan-600/30
+                                disabled:opacity-30 disabled:cursor-not-allowed
+                                transition-colors
+                              "
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </form>
+                      )}
+
                       <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
-                        {taskIds.length === 0 ? (
-                          <p className="text-slate-600 text-xs italic pl-5 py-2">
-                            Drop tasks here
-                          </p>
+                        {taskIds.length === 0 && !isAdding ? (
+                          <button
+                            onClick={() => {
+                              setAddingToCategory(category);
+                              setNewTaskTitle('');
+                            }}
+                            className="
+                              w-full pl-5 py-3 text-left
+                              text-slate-600 hover:text-slate-400
+                              text-xs transition-colors
+                              flex items-center gap-2
+                            "
+                          >
+                            <span className="text-slate-700">+</span>
+                            <span>Add a {config.label.toLowerCase()} task</span>
+                          </button>
                         ) : (
                           <div className="space-y-1 pl-5">
                             {taskIds.map((taskId) => {
@@ -928,6 +1055,12 @@ function SchedulePanel({
   onGoToday,
   isLoading,
   error,
+  calendarAuthStatus,
+  calendarEvents,
+  calendarLoading,
+  onConnectCalendar,
+  onDisconnectCalendar,
+  onRefreshCalendar,
 }: {
   onClose?: () => void;
   plan: Plan | null;
@@ -942,6 +1075,12 @@ function SchedulePanel({
   onGoToday: () => void;
   isLoading: boolean;
   error: string | null;
+  calendarAuthStatus: CalendarAuthStatus | null;
+  calendarEvents: CalendarEvent[];
+  calendarLoading: boolean;
+  onConnectCalendar: () => void;
+  onDisconnectCalendar: () => void;
+  onRefreshCalendar: () => void;
 }) {
   const scheduleBlocks = plan?.scheduleBlocks || [];
   const taskMap = tasks.reduce((acc, t) => ({ ...acc, [t.id]: t }), {} as Record<string, Task>);
@@ -953,6 +1092,78 @@ function SchedulePanel({
     })
     .toUpperCase();
   const offsetTag = getScheduleOffsetTag(offset);
+  const dayRange = getLocalDayRange(viewDate);
+
+  type CalendarEventWithTime = {
+    event: CalendarEvent;
+    start: Date;
+    end: Date;
+  };
+
+  type ScheduleBlockEntry = {
+    block: ScheduleBlock;
+    start: Date;
+    end: Date;
+  };
+
+  const scheduleEntries: ScheduleBlockEntry[] = scheduleBlocks.map((block) => ({
+    block,
+    start: parseTimeOnDate(viewDate, block.start),
+    end: parseTimeOnDate(viewDate, block.end),
+  }));
+
+  scheduleEntries.sort((a, b) => a.start.getTime() - b.start.getTime());
+
+  const calendarEntries: CalendarEventWithTime[] = calendarEvents
+    .filter((event) => event.start && event.end)
+    .map((event) => ({
+      event,
+      start: parseCalendarDateTime(event.start),
+      end: parseCalendarDateTime(event.end),
+    }))
+    .filter((entry) => entry.start < dayRange.end && entry.end > dayRange.start)
+    .sort((a, b) => a.start.getTime() - b.start.getTime());
+
+  const overlaps = (aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) =>
+    aStart < bEnd && aEnd > bStart;
+
+  const eventsByBlock = new Map<ScheduleBlockEntry, CalendarEventWithTime[]>();
+  const unassignedEvents: CalendarEventWithTime[] = [];
+
+  for (const entry of calendarEntries) {
+    const matchedBlock = scheduleEntries.find((block) =>
+      overlaps(block.start, block.end, entry.start, entry.end)
+    );
+    if (matchedBlock) {
+      const existing = eventsByBlock.get(matchedBlock) ?? [];
+      existing.push(entry);
+      eventsByBlock.set(matchedBlock, existing);
+    } else {
+      unassignedEvents.push(entry);
+    }
+  }
+
+  const timelineItems = [
+    ...scheduleEntries.map((entry) => ({
+      type: 'block' as const,
+      sortTime: entry.start.getTime(),
+      entry,
+      conflicts: eventsByBlock.get(entry) ?? [],
+    })),
+    ...unassignedEvents.map((entry) => ({
+      type: 'event' as const,
+      sortTime: entry.start.getTime(),
+      entry,
+    })),
+  ].sort((a, b) => a.sortTime - b.sortTime);
+
+  const formatEventTimeRange = (event: CalendarEvent) => {
+    if (event.isAllDay) return 'All day';
+    const start = parseCalendarDateTime(event.start);
+    const end = parseCalendarDateTime(event.end);
+    const formatOptions: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit', hour12: false };
+    return `${start.toLocaleTimeString('en-US', formatOptions)} — ${end.toLocaleTimeString('en-US', formatOptions)}`;
+  };
 
   return (
     <GlassPanel className="w-72 h-full flex flex-col rounded-r-none" glow>
@@ -1047,52 +1258,146 @@ function SchedulePanel({
       {/* Timeline */}
       <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
         {isLoading ? (
-          <div className="flex items-center justify-center h-full">
+          <div className="flex items-center justify-center py-8">
             <p className="text-slate-600 text-sm font-mono">Loading…</p>
           </div>
         ) : error ? (
-          <div className="flex items-center justify-center h-full">
+          <div className="flex items-center justify-center py-8">
             <p className="text-rose-400 text-sm font-mono text-center">{error}</p>
           </div>
-        ) : scheduleBlocks.length === 0 ? (
-          <div className="flex items-center justify-center h-full">
+        ) : timelineItems.length === 0 ? (
+          <div className="flex items-center justify-center py-8">
             <p className="text-slate-600 text-sm italic">No schedule planned</p>
           </div>
         ) : (
           <div className="space-y-2">
-            {scheduleBlocks.map((block, idx) => {
+            {timelineItems.map((item, idx) => {
+              if (item.type === 'event') {
+                const event = item.entry.event;
+                return (
+                  <div
+                    key={`event-${event.id}-${idx}`}
+                    className={`
+                      p-3 rounded-lg border
+                      ${CALENDAR_EVENT_STYLE.bg} ${CALENDAR_EVENT_STYLE.border}
+                    `}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-slate-300 text-xs font-mono">
+                        {formatEventTimeRange(event)}
+                      </span>
+                      <span className={`text-[10px] font-mono uppercase ${CALENDAR_EVENT_STYLE.color}`}>
+                        Google
+                      </span>
+                    </div>
+                    <p className="text-slate-200 text-sm font-medium">{event.summary}</p>
+                    {event.description && (
+                      <p className="text-slate-500 text-xs truncate mt-0.5">
+                        {event.description}
+                      </p>
+                    )}
+                  </div>
+                );
+              }
+
+              const block = item.entry.block;
               const style = BLOCK_TYPE_STYLES[block.type] || BLOCK_TYPE_STYLES.shallow_work;
               const linkedTask = block.taskId ? taskMap[block.taskId] : null;
+              const conflicts = item.conflicts;
+              const hasConflicts = conflicts.length > 0;
 
               return (
-                <div
-                  key={idx}
-                  className={`
-                    p-3 rounded-lg border
-                    ${style.bg} ${style.border}
-                    transition-all duration-200
-                    hover:scale-[1.02]
-                  `}
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-slate-300 text-xs font-mono">
-                      {block.start} — {block.end}
-                    </span>
-                  </div>
-                  <p className="text-slate-200 text-sm font-medium">{block.label}</p>
-                  {linkedTask && (
-                    <p className="text-slate-400 text-xs mt-1 truncate">
-                      → {linkedTask.title}
-                    </p>
+                <div key={`block-${block.start}-${block.end}-${idx}`} className="space-y-2">
+                  {hasConflicts && (
+                    <div className="space-y-1">
+                      {conflicts.map((conflict, conflictIdx) => (
+                        <div
+                          key={`conflict-${conflict.event.id}-${conflictIdx}`}
+                          className={`
+                            p-2 rounded-lg border
+                            ${CALENDAR_EVENT_STYLE.bg} ${CALENDAR_EVENT_STYLE.border}
+                          `}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-slate-300 text-[11px] font-mono">
+                              {formatEventTimeRange(conflict.event)}
+                            </span>
+                            <span className={`text-[10px] font-mono uppercase ${CALENDAR_EVENT_STYLE.color}`}>
+                              Busy
+                            </span>
+                          </div>
+                          <p className="text-slate-200 text-sm">{conflict.event.summary}</p>
+                        </div>
+                      ))}
+                    </div>
                   )}
-                  <p className="text-slate-500 text-xs mt-1 font-mono uppercase">
-                    {style.label}
-                  </p>
+                  <div
+                    className={`
+                      p-3 rounded-lg border
+                      ${style.bg} ${style.border}
+                      transition-all duration-200
+                      hover:scale-[1.02]
+                      ${hasConflicts ? 'ml-3 border-l-2 border-amber-500/30 opacity-80' : ''}
+                    `}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-slate-300 text-xs font-mono">
+                        {block.start} — {block.end}
+                      </span>
+                    </div>
+                    <p className="text-slate-200 text-sm font-medium">{block.label}</p>
+                    {linkedTask && (
+                      <p className="text-slate-400 text-xs mt-1 truncate">
+                        → {linkedTask.title}
+                      </p>
+                    )}
+                    <p className="text-slate-500 text-xs mt-1 font-mono uppercase">
+                      {style.label}
+                    </p>
+                  </div>
                 </div>
               );
             })}
           </div>
         )}
+
+        <div className="mt-6 pt-4 border-t border-slate-700/50 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-slate-500 text-[10px] font-mono uppercase tracking-wider">
+              Google Calendar
+            </p>
+            {calendarAuthStatus?.connected && !calendarAuthStatus.tokenExpired && (
+              <button
+                onClick={onRefreshCalendar}
+                disabled={calendarLoading}
+                className="
+                  p-2 rounded-lg
+                  hover:bg-slate-800/50
+                  text-slate-400 hover:text-cyan-400
+                  transition-colors
+                  disabled:opacity-50
+                "
+                title="Refresh events"
+              >
+                <span className={calendarLoading ? 'animate-spin' : ''}>↻</span>
+              </button>
+            )}
+          </div>
+
+          <CalendarConnectionCard
+            authStatus={calendarAuthStatus}
+            onConnect={onConnectCalendar}
+            onDisconnect={onDisconnectCalendar}
+          />
+
+          {calendarAuthStatus?.connected && !calendarAuthStatus.tokenExpired && (
+            <CalendarEventList
+              events={calendarEvents}
+              isLoading={calendarLoading}
+              currentTime={currentTime}
+            />
+          )}
+        </div>
       </div>
 
       {/* Footer */}
@@ -1124,6 +1429,12 @@ function ScheduleDrawer({
   onGoToday,
   isLoading,
   error,
+  calendarAuthStatus,
+  calendarEvents,
+  calendarLoading,
+  onConnectCalendar,
+  onDisconnectCalendar,
+  onRefreshCalendar,
 }: {
   isOpen: boolean;
   onToggle: () => void;
@@ -1139,6 +1450,12 @@ function ScheduleDrawer({
   onGoToday: () => void;
   isLoading: boolean;
   error: string | null;
+  calendarAuthStatus: CalendarAuthStatus | null;
+  calendarEvents: CalendarEvent[];
+  calendarLoading: boolean;
+  onConnectCalendar: () => void;
+  onDisconnectCalendar: () => void;
+  onRefreshCalendar: () => void;
 }) {
   return (
     <>
@@ -1146,21 +1463,27 @@ function ScheduleDrawer({
       <button
         onClick={onToggle}
         className={`
-          fixed right-4 top-1/2 -translate-y-1/2 z-50
-          w-12 h-24
+          fixed right-0 top-1/2 -translate-y-1/2 z-50
+          px-3 py-4
           bg-slate-900/80 backdrop-blur-md
-          border border-slate-700/50
-          rounded-l-lg
-          flex items-center justify-center
+          border border-r-0 border-slate-700/50
+          rounded-l-xl
+          flex flex-col items-center justify-center gap-2
           transition-all duration-300
-          hover:bg-slate-800/80 hover:border-cyan-500/30
+          hover:bg-slate-800/80 hover:border-amber-500/30 hover:px-4
           group
           ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
         `}
         style={{ WebkitBackdropFilter: 'blur(12px)' }}
         aria-label="Open schedule"
       >
-        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-lg">
+        <span className="text-amber-400 text-sm font-mono">◆</span>
+        <span className="text-slate-400 group-hover:text-amber-400 transition-colors text-[10px] font-mono uppercase tracking-widest"
+          style={{ writingMode: 'vertical-lr' }}
+        >
+          Schedule
+        </span>
+        <span className="text-slate-400 group-hover:text-amber-400 transition-colors text-xs">
           ◀
         </span>
       </button>
@@ -1187,6 +1510,12 @@ function ScheduleDrawer({
           onGoToday={onGoToday}
           isLoading={isLoading}
           error={error}
+          calendarAuthStatus={calendarAuthStatus}
+          calendarEvents={calendarEvents}
+          calendarLoading={calendarLoading}
+          onConnectCalendar={onConnectCalendar}
+          onDisconnectCalendar={onDisconnectCalendar}
+          onRefreshCalendar={onRefreshCalendar}
         />
       </div>
 
@@ -1554,26 +1883,31 @@ function FocusDrawer({
       <button
         onClick={onToggle}
         className={`
-          fixed bottom-4 left-1/2 -translate-x-1/2 z-50
-          px-6 py-3
+          fixed bottom-0 left-1/2 -translate-x-1/2 z-50
+          px-8 py-3
           bg-slate-900/80 backdrop-blur-md
-          border border-slate-700/50
-          rounded-t-lg
-          flex items-center justify-center gap-2
+          border border-b-0 border-slate-700/50
+          rounded-t-xl
+          flex items-center justify-center gap-3
           transition-all duration-300
-          hover:bg-slate-800/80 hover:border-cyan-500/30
+          hover:bg-slate-800/80 hover:border-cyan-500/30 hover:py-4
           group
           ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
         `}
         style={{ WebkitBackdropFilter: 'blur(12px)' }}
         aria-label="Open current focus"
       >
-        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-sm">
+        <span className="text-cyan-400 group-hover:text-cyan-300 transition-colors text-sm">
           ▲
         </span>
-        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-xs font-mono uppercase tracking-wider">
+        <span className="text-slate-300 group-hover:text-cyan-400 transition-colors text-xs font-mono uppercase tracking-wider">
           Current Focus
         </span>
+        {task && (
+          <span className="text-slate-500 text-xs truncate max-w-[200px]">
+            — {task.title}
+          </span>
+        )}
       </button>
 
       {/* Drawer Panel */}
@@ -2037,24 +2371,27 @@ function IntentionsDrawer({
       <button
         onClick={onToggle}
         className={`
-          fixed left-4 bottom-32 z-50
-          w-12 h-12 rounded-full
+          fixed left-0 bottom-24 z-50
+          px-3 py-3 rounded-r-xl
           bg-slate-900/80 backdrop-blur-md
-          border border-slate-700/50
-          flex items-center justify-center
+          border border-l-0 border-slate-700/50
+          flex items-center justify-center gap-2
           transition-all duration-300
-          hover:bg-slate-800/80 hover:border-cyan-500/30
+          hover:bg-slate-800/80 hover:border-cyan-500/30 hover:px-4
           group
           ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
         `}
         style={{ WebkitBackdropFilter: 'blur(12px)' }}
         aria-label="Open intentions"
       >
-        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-lg">
+        <span className="text-cyan-400 group-hover:text-cyan-300 transition-colors text-sm">
           ⟡
         </span>
+        <span className="text-slate-400 group-hover:text-cyan-400 transition-colors text-[10px] font-mono uppercase tracking-wider">
+          Plans
+        </span>
         {activeIntentions.length > 0 && (
-          <span className="absolute -top-1 -right-1 w-5 h-5 bg-cyan-500 rounded-full text-xs text-white flex items-center justify-center">
+          <span className="w-5 h-5 bg-cyan-500 rounded-full text-xs text-white flex items-center justify-center flex-shrink-0">
             {activeIntentions.length}
           </span>
         )}
@@ -2409,23 +2746,7 @@ function WorkBlockTimer({
   const [focusRating, setFocusRating] = useState<number>(3);
 
   if (!activeWorkBlock) {
-    return (
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => onStartBlock(DEFAULT_WORK_BLOCK_DURATION)}
-          className="
-            px-4 py-2 rounded-lg
-            bg-cyan-600/20 border border-cyan-500/30
-            text-cyan-400 text-sm font-medium
-            hover:bg-cyan-600/30 hover:border-cyan-500/50
-            transition-all flex items-center gap-2
-          "
-        >
-          <span>▶</span>
-          <span>Start Focus Block</span>
-        </button>
-      </div>
-    );
+    return null;
   }
 
   const [startH, startM] = activeWorkBlock.startTime.split(':').map(Number);
@@ -2876,118 +3197,6 @@ function CalendarEventList({
   );
 }
 
-function CalendarDrawer({
-  isOpen,
-  onToggle,
-  authStatus,
-  events,
-  isLoading,
-  currentTime,
-  onConnect,
-  onDisconnect,
-  onRefresh,
-}: {
-  isOpen: boolean;
-  onToggle: () => void;
-  authStatus: CalendarAuthStatus | null;
-  events: CalendarEvent[];
-  isLoading: boolean;
-  currentTime: Date;
-  onConnect: () => void;
-  onDisconnect: () => void;
-  onRefresh: () => void;
-}) {
-  return (
-    <>
-      {/* Toggle Button */}
-      <button
-        onClick={onToggle}
-        className={`
-          fixed top-1/2 -translate-y-1/2 z-40
-          w-10 h-24
-          bg-slate-900/80 backdrop-blur-md
-          flex items-center justify-center
-          transition-all duration-300 ease-in-out
-          hover:bg-slate-800/80
-          group
-          ${isOpen ? 'right-80 rounded-l-xl border-l border-y border-slate-700/50' : 'right-0 rounded-l-xl border-l border-y border-slate-700/50'}
-        `}
-        style={{ WebkitBackdropFilter: 'blur(12px)' }}
-        title={isOpen ? 'Hide Calendar' : 'Show Calendar'}
-      >
-        <span className={`
-          text-slate-400 group-hover:text-cyan-400
-          transition-transform duration-300
-          ${isOpen ? 'rotate-180' : ''}
-        `}>
-          📅
-        </span>
-      </button>
-
-      {/* Drawer Panel */}
-      <div
-        className={`
-          fixed top-0 right-0 h-full w-80 z-30
-          transform transition-transform duration-300 ease-in-out
-          ${isOpen ? 'translate-x-0' : 'translate-x-full'}
-        `}
-      >
-        <GlassPanel className="h-full flex flex-col rounded-l-xl rounded-r-none" glow>
-          {/* Header */}
-          <div className="p-4 border-b border-slate-700/50">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-cyan-400">📅</span>
-                <h2 className="text-slate-200 font-semibold">Calendar</h2>
-              </div>
-              {authStatus?.connected && (
-                <button
-                  onClick={onRefresh}
-                  disabled={isLoading}
-                  className="
-                    p-2 rounded-lg
-                    hover:bg-slate-800/50
-                    text-slate-400 hover:text-cyan-400
-                    transition-colors
-                    disabled:opacity-50
-                  "
-                  title="Refresh events"
-                >
-                  <span className={isLoading ? 'animate-spin' : ''}>↻</span>
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Content */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {/* Connection Status */}
-            <CalendarConnectionCard
-              authStatus={authStatus}
-              onConnect={onConnect}
-              onDisconnect={onDisconnect}
-            />
-
-            {/* Events List */}
-            {authStatus?.connected && !authStatus.tokenExpired && (
-              <div>
-                <p className="text-slate-500 text-[10px] font-mono uppercase tracking-wider mb-3">
-                  Upcoming Events
-                </p>
-                <CalendarEventList
-                  events={events}
-                  isLoading={isLoading}
-                  currentTime={currentTime}
-                />
-              </div>
-            )}
-          </div>
-        </GlassPanel>
-      </div>
-    </>
-  );
-}
-
 function CompassionPromptModal({
   isVisible,
   onClose,
@@ -3158,14 +3367,14 @@ function EnergyDashboardDrawer({
       <button
         onClick={onToggle}
         className={`
-          fixed top-4 left-1/2 -translate-x-1/2 z-50
-          px-4 py-2
+          fixed top-0 left-1/2 -translate-x-1/2 z-50
+          px-6 py-3
           bg-slate-900/80 backdrop-blur-md
-          border border-slate-700/50
-          rounded-b-lg
-          flex items-center justify-center gap-2
+          border border-t-0 border-slate-700/50
+          rounded-b-xl
+          flex items-center justify-center gap-3
           transition-all duration-300
-          hover:bg-slate-800/80 hover:border-emerald-500/30
+          hover:bg-slate-800/80 hover:border-emerald-500/30 hover:py-4
           group
           ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
         `}
@@ -3173,14 +3382,22 @@ function EnergyDashboardDrawer({
         aria-label="Open energy tracker"
       >
         {!hasCheckIn && (
-          <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+          <span className="w-2.5 h-2.5 bg-emerald-400 rounded-full animate-pulse" />
         )}
-        <span className="text-slate-400 group-hover:text-emerald-400 transition-colors text-xs font-mono uppercase tracking-wider">
+        {hasCheckIn && (
+          <span className="w-2.5 h-2.5 bg-emerald-400 rounded-full" />
+        )}
+        <span className="text-slate-300 group-hover:text-emerald-400 transition-colors text-xs font-mono uppercase tracking-wider">
           Energy
         </span>
         {hasCheckIn && energyState?.checkIn && (
-          <span className={`${MOOD_CONFIG[energyState.checkIn.mood].color} text-sm`}>
-            {energyState.checkIn.energyLevel}
+          <span className={`${MOOD_CONFIG[energyState.checkIn.mood].color} text-sm font-semibold`}>
+            {energyState.checkIn.energyLevel}/10
+          </span>
+        )}
+        {!hasCheckIn && (
+          <span className="text-emerald-400/60 text-[10px] font-mono">
+            Check in
           </span>
         )}
       </button>
@@ -3834,6 +4051,37 @@ export default function ProfFlowPage() {
   const [checkInModalOpen, setCheckInModalOpen] = useState(false);
   const [breakQualityModalOpen, setBreakQualityModalOpen] = useState(false);
 
+  // Panel conflict resolution — opening one panel closes conflicting ones
+  const openTaskDrawer = useCallback(() => {
+    setTaskDrawerOpen(true);
+    setIntentionsDrawerOpen(false); // same left edge
+  }, []);
+  const openIntentionsDrawer = useCallback(() => {
+    setIntentionsDrawerOpen(true);
+    setTaskDrawerOpen(false); // same left edge
+  }, []);
+  const toggleTaskDrawer = useCallback(() => {
+    setTaskDrawerOpen(prev => {
+      if (!prev) setIntentionsDrawerOpen(false);
+      return !prev;
+    });
+  }, []);
+  const toggleScheduleDrawer = useCallback(() => {
+    setScheduleDrawerOpen(prev => !prev);
+  }, []);
+  const toggleFocusDrawer = useCallback(() => {
+    setFocusDrawerOpen(prev => !prev);
+  }, []);
+  const toggleIntentionsDrawer = useCallback(() => {
+    setIntentionsDrawerOpen(prev => {
+      if (!prev) setTaskDrawerOpen(false);
+      return !prev;
+    });
+  }, []);
+  const toggleEnergyDrawer = useCallback(() => {
+    setEnergyDrawerOpen(prev => !prev);
+  }, []);
+
   // Weekly review state
   const [weeklyReview, setWeeklyReview] = useState<WeeklyReview | null>(null);
   const [reviewWizardOpen, setReviewWizardOpen] = useState(false);
@@ -3849,7 +4097,6 @@ export default function ProfFlowPage() {
   const [calendarAuthStatus, setCalendarAuthStatus] = useState<CalendarAuthStatus | null>(null);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [calendarLoading, setCalendarLoading] = useState(false);
-  const [calendarDrawerOpen, setCalendarDrawerOpen] = useState(false);
 
   const todayDate = getDateAtLocalMidnight(currentTime);
   const scheduleViewDate = addDaysLocal(todayDate, scheduleOffset);
@@ -3872,7 +4119,7 @@ export default function ProfFlowPage() {
     if (calendarConnected === 'true') {
       // Successfully connected - refresh auth status and open drawer
       fetchCalendarAuthStatus();
-      setCalendarDrawerOpen(true);
+      setScheduleDrawerOpen(true);
       // Clean up URL
       window.history.replaceState({}, '', window.location.pathname);
     } else if (calendarError) {
@@ -3896,6 +4143,12 @@ export default function ProfFlowPage() {
       fetchCalendarAuthStatus(),
     ]);
   }, []);
+
+  useEffect(() => {
+    if (!calendarAuthStatus?.connected || calendarAuthStatus.tokenExpired) return;
+    const { timeMin, timeMax } = getCalendarRange(scheduleViewDate);
+    fetchCalendarEvents(timeMin, timeMax);
+  }, [calendarAuthStatus?.connected, calendarAuthStatus?.tokenExpired, scheduleViewDateKey]);
 
   // Refresh energy data only when there's an active work block or break (need timer updates)
   // Otherwise, no polling - data refreshes on user actions
@@ -4216,6 +4469,12 @@ export default function ProfFlowPage() {
     }
   };
 
+  const getCalendarRange = (baseDate: Date) => {
+    const start = getDateAtLocalMidnight(baseDate);
+    const end = addDaysLocal(start, CALENDAR_LOOKAHEAD_DAYS + 1);
+    return { timeMin: start.toISOString(), timeMax: end.toISOString() };
+  };
+
   const fetchCalendarAuthStatus = async () => {
     try {
       const res = await fetch('/api/auth/google/status');
@@ -4224,7 +4483,8 @@ export default function ProfFlowPage() {
       setCalendarAuthStatus(data);
       // If connected, fetch events
       if (data.connected && !data.tokenExpired) {
-        fetchCalendarEvents();
+        const { timeMin, timeMax } = getCalendarRange(scheduleViewDate);
+        fetchCalendarEvents(timeMin, timeMax);
       }
     } catch (err) {
       console.error('Failed to fetch calendar auth status:', err);
@@ -4234,9 +4494,12 @@ export default function ProfFlowPage() {
   const fetchCalendarEvents = async (timeMin?: string, timeMax?: string) => {
     setCalendarLoading(true);
     try {
+      const range = timeMin && timeMax
+        ? { timeMin, timeMax }
+        : getCalendarRange(scheduleViewDate);
       const params = new URLSearchParams();
-      if (timeMin) params.set('timeMin', timeMin);
-      if (timeMax) params.set('timeMax', timeMax);
+      params.set('timeMin', range.timeMin);
+      params.set('timeMax', range.timeMax);
 
       const url = '/api/calendar/events' + (params.toString() ? '?' + params.toString() : '');
       const res = await fetch(url);
@@ -4518,6 +4781,20 @@ export default function ProfFlowPage() {
     setTaskDrawerOpen(false);
   }, []);
 
+  const handleAddTask = useCallback(async (title: string, category: Task['category']) => {
+    try {
+      const res = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, category }),
+      });
+      if (!res.ok) throw new Error('Failed to create task');
+      await fetchTasks();
+    } catch (err) {
+      console.error('Failed to add task:', err);
+    }
+  }, []);
+
   const handleCompleteTask = useCallback(async () => {
     if (!focusTask) return;
     await handleSetTaskCompleted(focusTask, true);
@@ -4730,24 +5007,23 @@ export default function ProfFlowPage() {
   return (
     <div className="min-h-screen h-screen overflow-hidden bg-slate-950 text-slate-100">
       {/* Background */}
-      <AmbientBackground dim={taskDrawerOpen || scheduleDrawerOpen || focusDrawerOpen || intentionsDrawerOpen} />
-
-      <AmbientBackground dim={taskDrawerOpen || scheduleDrawerOpen || focusDrawerOpen || energyDrawerOpen} />
+      <AmbientBackground dim={taskDrawerOpen || scheduleDrawerOpen || focusDrawerOpen || intentionsDrawerOpen || energyDrawerOpen} />
 
       {/* Task Drawer (Left - slides in) */}
       <TaskDrawer
         isOpen={taskDrawerOpen}
-        onToggle={() => setTaskDrawerOpen(!taskDrawerOpen)}
+        onToggle={toggleTaskDrawer}
         tasks={tasks}
         onSelectTask={handleSelectTask}
         onSetTaskCompleted={handleSetTaskCompleted}
         onUpdateManifestOrder={handleUpdateManifestOrder}
+        onAddTask={handleAddTask}
       />
 
       {/* Schedule Drawer (Right - slides in) */}
       <ScheduleDrawer
         isOpen={scheduleDrawerOpen}
-        onToggle={() => setScheduleDrawerOpen(!scheduleDrawerOpen)}
+        onToggle={toggleScheduleDrawer}
         plan={scheduleViewPlan}
         tasks={tasks}
         currentTime={currentTime}
@@ -4760,27 +5036,18 @@ export default function ProfFlowPage() {
         onGoToday={handleGoToTodaySchedule}
         isLoading={scheduleLoading}
         error={scheduleError}
+        calendarAuthStatus={calendarAuthStatus}
+        calendarEvents={calendarEvents}
+        calendarLoading={calendarLoading}
+        onConnectCalendar={handleConnectCalendar}
+        onDisconnectCalendar={handleDisconnectCalendar}
+        onRefreshCalendar={() => fetchCalendarEvents()}
       />
-
-      {/* Calendar Drawer (Right side - Google Calendar) */}
-      {!scheduleDrawerOpen && (
-        <CalendarDrawer
-          isOpen={calendarDrawerOpen}
-          onToggle={() => setCalendarDrawerOpen(!calendarDrawerOpen)}
-          authStatus={calendarAuthStatus}
-          events={calendarEvents}
-          isLoading={calendarLoading}
-          currentTime={currentTime}
-          onConnect={handleConnectCalendar}
-          onDisconnect={handleDisconnectCalendar}
-          onRefresh={() => fetchCalendarEvents()}
-        />
-      )}
 
       {/* Focus Drawer (Bottom - slides up) */}
       <FocusDrawer
         isOpen={focusDrawerOpen}
-        onToggle={() => setFocusDrawerOpen(!focusDrawerOpen)}
+        onToggle={toggleFocusDrawer}
         task={focusTask}
         onComplete={handleCompleteTask}
       />
@@ -4788,7 +5055,7 @@ export default function ProfFlowPage() {
       {/* Intentions Drawer (Left Bottom - slides in) */}
       <IntentionsDrawer
         isOpen={intentionsDrawerOpen}
-        onToggle={() => setIntentionsDrawerOpen(!intentionsDrawerOpen)}
+        onToggle={toggleIntentionsDrawer}
         intentions={intentions}
         tasks={tasks}
         onTrigger={handleTriggerIntention}
@@ -4847,7 +5114,7 @@ export default function ProfFlowPage() {
       {/* Energy Dashboard Drawer (Top - slides down) */}
       <EnergyDashboardDrawer
         isOpen={energyDrawerOpen}
-        onToggle={() => setEnergyDrawerOpen(!energyDrawerOpen)}
+        onToggle={toggleEnergyDrawer}
         energyState={energyState}
         suggestions={energySuggestions}
         currentTime={currentTime}
