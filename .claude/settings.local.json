@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx next build:*)",
+      "Bash(git -C /Users/hindman/ProfFlow status:*)",
+      "Bash(git -C /Users/hindman/ProfFlow diff --stat)",
+      "Bash(git -C /Users/hindman/ProfFlow log --oneline -5)",
+      "Bash(git -C /Users/hindman/ProfFlow add:*)",
+      "Bash(git -C /Users/hindman/ProfFlow commit -m \"$\\(cat <<''EOF''\nfix: improve panel UX — conflict resolution, discoverable toggles, inline task add, dedup energy controls\n\nP0: Opening left-side panels \\(Task Manifest / If-Then Plans\\) now auto-closes\nthe other to prevent overlap. All drawer toggle buttons redesigned with labels,\nflush-to-edge positioning, and hover expansion for discoverability.\n\nP1: Add per-category inline quick-add inputs in Task Manifest with proper empty\nstates. Remove redundant \"Start Focus Block\" from WorkBlockTimer \\(Quick Actions\nsection covers it\\). Energy toggle pill now shows energy level as N/10 with\ncheck-in prompt.\n\nAlso fixes duplicate AmbientBackground render.\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git -C /Users/hindman/ProfFlow push -u origin claude/review-profflow-project-PTBSm)"
+    ]
+  }
+}

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as data from '@/lib/data';
+import { getAuthenticatedClient } from '@/lib/google/oauth';
 
 // Security: Only allow same-origin requests
 function validateOrigin(request: NextRequest): boolean {
@@ -25,10 +26,18 @@ export async function GET(request: NextRequest) {
     const configured = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 
     const status = await data.getCalendarAuthStatus();
+    if (configured && status.connected && status.tokenExpired) {
+      // Attempt refresh so "expired" reflects refresh failures, not access token TTL.
+      await getAuthenticatedClient();
+    }
+
+    const refreshedStatus = status.tokenExpired
+      ? await data.getCalendarAuthStatus()
+      : status;
 
     return NextResponse.json({
       configured,
-      ...status,
+      ...refreshedStatus,
     });
   } catch (error) {
     console.error('Failed to get calendar auth status:', error);
